@@ -68,3 +68,57 @@ class Spectrometer:
     matrix_size_mm: float
     df_avg: float = 0.0
     df_prism_min: float = 0.0
+
+@dataclass(frozen=True)
+class ConfigOGF:
+    """
+        Конфигурационные параметры оптимизатора эшелле-спектрометра (OptimalGratingFinder).
+
+        Содержит диапазоны решёток, углов, диапазон длин волн и ограничения,
+        используемые при расчёте и оптимизации спектральной системы.
+
+        Атрибуты
+        ---------
+        lines_in_mm : [float, float]
+            Диапазон частоты штрихов дифракционной решётки, штр/мм (например [100, 300]).
+        gamma_deg : [float, float]
+            Диапазон углов наклона решётки γ в градусах (например [0.0, 45.0]).
+        lambda_min : float
+            Минимальная длина волны спектра, мкм.
+        lambda_max : float
+            Максимальная длина волны спектра, мкм.
+        lambda_ctr : float
+            Центральная длина волны, мкм — используется для балансировки диапазона при расчёте эшеллеграммы.
+        matrix_size : float
+            Размер детектора по оси дисперсии, мм.
+        glass_type : str
+            Тип стекла призм (например 'BK7', 'SF11') — определяет дисперсию.
+        slit_width : int
+            Ширина входной щели, мкм.
+        res_limit : float
+            Минимально допустимое разрешение системы (безразмерно).
+        max_focal : int
+            Максимально допустимое фокусное расстояние объектива, мм.
+        min_dist_k : float
+            Минимально допустимое отношение расстояния от решётки до призмы.
+        max_focal_matrix_ratio : int, optional
+            Максимально допустимое отношение фокусного расстояния к размеру матрицы (по умолчанию None).
+        max_lost_line : int, optional
+            Максимально допустимое число потерянных спектральных линий (по умолчанию None).
+        grating_cross_tilt_deg : float, default=6
+            Поперечный наклон эшелле-решётки относительно входной щели, градусы.
+        """
+    lines_in_mm: [float, float]
+    gamma_deg: [float, float]
+    lambda_min: float
+    lambda_max: float
+    lambda_ctr: float
+    matrix_size: float
+    glass_type: str
+    slit_width: int
+    res_limit: float
+    max_focal: int
+    min_dist_k: float
+    max_focal_matrix_ratio: int = None
+    max_lost_line: int = None
+    grating_cross_tilt_deg: float = 6

@@ -1,7 +1,8 @@
-import math
-import tkinter as tk
 from lib.echele.optimalGratingFinder import OptimalGratingFinder
 from lib.gui.gui import EcheleGUI
+from lib.echele.dataClasses import (
+    ConfigOGF
+)
 
 
 
@@ -19,19 +20,19 @@ LAMBDA_MIN = 167  # нм
 LAMBDA_MAX = 780  # нм
 LAMBDA_CTR = 200  # нм
 
+
 def main():
-    ogf = OptimalGratingFinder([70, 120], [40,80], LAMBDA_MIN, LAMBDA_MAX, LAMBDA_CTR,
-                               LIMIT*2, "CaF", SLIT_WIDTH, RES_LIMIT, MAX_FOCAL, MIN_DIST, MAX_RATIO,
-                               MAX_LOST_LINE)
+    configOGF = ConfigOGF([70, 120], [40,80], LAMBDA_MIN, LAMBDA_MAX, LAMBDA_CTR,
+                               LIMIT*2, "CaF", SLIT_WIDTH, RES_LIMIT, MAX_FOCAL, MIN_DIST, MAX_RATIO, MAX_LOST_LINE)
+    ogf = OptimalGratingFinder(configOGF)
     ogf.load_spectra_lines_list_from_excel("spectral_line_list.xlsx")
     gui = EcheleGUI(ogf)
     gui.run()
-    ogf.search_optimal(save_excel=True)
-    h = ogf.evaluate_grating(94.7, math.radians(46))
-    print(ogf.optimal_grating_result_list)
 
 
 if __name__ == '__main__':
+    import multiprocessing as mp
+    mp.freeze_support()
     main()
 
 

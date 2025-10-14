@@ -2,6 +2,7 @@ from __future__ import annotations
 import numpy as np
 import math
 from functools import lru_cache
+from typing import Optional, Tuple
 
 
 def prism_incidence_angle_rad(prism_tilt_deg: float,
@@ -217,3 +218,77 @@ def find_order_edges(
         x.append(l2)
 
     return x[0], y[0], x[1], y[1], lambdamin, lambdamax
+
+
+def wavelength_to_detector_coords(
+        lambda_nm: float,
+        k_max: float,
+        f_mm: float,
+        lines_in_mm: float,
+        gamma_rad: float,
+        prism_tilt_deg: float,
+        prism_wedge_angle_rad: float,
+        df_avg: float,
+        df_prism_min: float,
+        glass_type: str,
+        phi2: Optional[float] = None,
+    ) -> Optional[Tuple[float, float]]:
+    """
+    Вычислить координаты (x_mm, y_mm) на детекторе для заданной длины волны и порядка k.
+
+    Возвращает (x_mm, y_mm) в миллиметрах, или None при отсутствии физического решения.
+
+    Алгоритм повторяет логику find_order_edges, но для одиночной длины волны:
+    1. вычисляем угол призмовой дифракции e = angle_diffraction_prism(lambda_mm, prism_rad, glass_type, phi, phi2)
+       (phi — угол падения на призму; phi = prism_incidence_angle_rad(prism_tilt_deg, prism_wedge_angle_rad))
+    2. y = f * sin(e - df_prism_min)  (с учётом сдвига df_prism_min, как в find_order_edges)
+    3. df = diffraction_angle(k, lambda_mm, lines_in_mm, gamma_rad)
+       x = f * sin(df_avg - df)   (как в find_order_edges: df = df_avg - df_value)
+
+    :param lambda_nm: длина волны в нм
+    :param k_max: максимальный порядок дифракции
+    :param f_mm: фокус
+    :param lines_in_mm:  количество штрихов на мм
+    :param gamma_rad: угол блеска, рад
+    :param prism_tilt_deg: угол наклона призмы из Земакс
+    :param prism_wedge_angle_rad: угол клина призмы
+    :param df_avg: серединная дифракция для центровки
+    :param df_prism_min: дифракция призмы для минимальной длины волны
+    :param glass_type: тип стекла призмы ("CaF")
+    :param phi2: угол наклона решетки вдоль штриха
+    :return: координаты x, y
+    """
+
+    # 1) prepare phi (angle of incidence on prism first face)
+    lambda_mm = lambda_nm * 1e-6
+    # in your earlier code: prism_incidence_angle_rad(prism_tilt_deg, prism_wedge_angle_rad)
+    phi = prism_incidence_angle_rad(prism_tilt_deg, prism_wedge_angle_rad)
+
+    k = k_max
+    lambda1 = 2 * np.sin(gamma_rad) / lines_in_mm
+    lambdamin, lambdamax = lambda_range(lambda1, k)
+
+    while not(lambdamin < lambda_mm < lambdamax) and k != 1:
+        k -= 1
+        lambdamin, lambdamax = lambda_range(lambda1, k)
+
+    # 3) prism diffraction angle e
+    e_value = angle_diffraction_prism(lambda_mm, prism_wedge_angle_rad, glass_type, phi, phi2)
+    if e_value is None:
+        return None
+
+    # In find_order_edges you subtracted df_prism_min: e = e_value - df_prism_min
+    e = e_value - df_prism_min
+
+    # guard domain for sin: sin accepts any real; but we'll compute y = f * sin(e)
+    y_mm = -float(f_mm) * math.sin(e)
+
+    # 4) diffraction angle for grating
+    df_value = diffraction_angle(k, lambda_mm, lines_in_mm, gamma_rad)
+    if df_value is None:
+        return None
+
+    df = df_avg - df_value
+    x_mm = float(f_mm) * math.sin(df)
+
+    return x_mm, y_mm

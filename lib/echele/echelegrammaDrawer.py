@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
-
 import numpy as np
 import multiprocessing as mp
 from  lib.echele.dataClasses import (
@@ -280,49 +279,26 @@ class EchelegrammaDrawer:
     def _evaluate_k(self, k: int, df_avg: float):
         raise NotImplementedError("_evaluate_k устарел — используйте evaluate_k_worker и draw_echelegramma.")
 
-        # tasks = [(k, 0) for k in k_range]
-        # with mp.Pool(mp.cpu_count()) as pool:
-        #     results = pool.starmap(self._evaluate_k, tasks)
-        #
-        # valid = [r for r in results if r is not None]
-        #
-        # max_y = valid[0][2]
-        # for v in valid:
-        #     if v[2] > max_y:
-        #         max_y = v[2]
-        #     if v[3] > max_y:
-        #         max_y = v[3]
-        #
-        # x_mean = (valid[len(valid)-1][0] + valid[len(valid)-1][1]) / 2
-        #
-        # for i, v in enumerate(valid):
-        #     valid[i][2] = abs(valid[i][2] - max_y)
-        #     valid[i][3] = abs(valid[i][3] - max_y)
-        #     valid[i][0] = valid[i][0] - x_mean
-        #     valid[i][1] = valid[i][1] - x_mean
-        #
-        # return valid
-
-    def _evaluate_k(
-            self, k: int, df_avg: float
-    ) -> [float, float, float, float]:
-        """
-        Рассчет положения x и y для краев порядка с учетом ограничения детектором
-        :param k: порядок
-        :return: ([float, float], [float, float]) положения x и y для краев порядка с учетом ограничения детектором
-        """
-
-        x_min, y_min, x_max, y_max, _, _ = find_order_edges(k, self.prism_wedge_angle_rad,
-                                                            self.prism_incidence_angle_rad,
-                                                            self.grating_groove_tilt_rad, self.focal,
-                                                            self.lines_in_mm, self.gamma_rad,
-                                                            df_avg, self.glass_type)
-
-        xs = np.array([x_min, x_max])
-        ys = np.array([y_min, y_max])
-        # ys = ys - ys.max()
-
-        #x_clipped = np.clip(xs, -self.matrix_size / 2 + self.dx, self.matrix_size / 2 + self.dx)
-        y_clipped = np.clip(ys, 0, self.matrix_size / 2 * 2 + self.dy)
-
-        return [x_min, x_max, y_min, y_max]
+    # def _evaluate_k(
+    #         self, k: int, df_avg: float
+    # ) -> [float, float, float, float]:
+    #     """
+    #     Рассчет положения x и y для краев порядка с учетом ограничения детектором
+    #     :param k: порядок
+    #     :return: ([float, float], [float, float]) положения x и y для краев порядка с учетом ограничения детектором
+    #     """
+    #
+    #     x_min, y_min, x_max, y_max, _, _ = find_order_edges(k, self.prism_wedge_angle_rad,
+    #                                                         self.prism_incidence_angle_rad,
+    #                                                         self.grating_groove_tilt_rad, self.focal,
+    #                                                         self.lines_in_mm, self.gamma_rad,
+    #                                                         df_avg, self.glass_type)
+    #
+    #     xs = np.array([x_min, x_max])
+    #     ys = np.array([y_min, y_max])
+    #     # ys = ys - ys.max()
+    #
+    #     #x_clipped = np.clip(xs, -self.matrix_size / 2 + self.dx, self.matrix_size / 2 + self.dx)
+    #     y_clipped = np.clip(ys, 0, self.matrix_size / 2 * 2 + self.dy)
+    #
+    #     return [x_min, x_max, y_min, y_max]
