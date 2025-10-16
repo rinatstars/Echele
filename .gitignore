@@ -3,6 +3,9 @@
 /venv/
 /Echele/
 /build/
+*.zmx
+*.ses
+*.xlsx
 
 # === Python ===
 __pycache__/
