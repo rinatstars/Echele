@@ -1,25 +1,0 @@
-
-fpython:S2208"GImport only needed names or import the module and then use its members.(ï€¢8ñÕ‡¾œ3
-Bpython:S125"Remove this commented out code.(Àîè°üÿÿÿÿ8ñÕ‡¾œ3
-Bpython:S125$"Remove this commented out code.(øÆßØùÿÿÿÿ8ñÕ‡¾œ3
-=python:S1250"Remove this commented out code.(žÞÆ½8ñÕ‡¾œ3
-=python:S125Q"Remove this commented out code.(”³»Ö8ñÕ‡¾œ3
-Bpython:S125l"Remove this commented out code.(†•ÿŠúÿÿÿÿ8ñÕ‡¾œ3
-=python:S125q"Remove this commented out code.(â½È´8ñÕ‡¾œ3
-Bpython:S125y"Remove this commented out code.(‹ó½Îþÿÿÿÿ8ñÕ‡¾œ3
-Cpython:S125¥"Remove this commented out code.(ïƒ³‰ýÿÿÿÿ8ñÕ‡¾œ3
->python:S125®"Remove this commented out code.(ú„¼¼8ñÕ‡¾œ3
->python:S125Ì"Remove this commented out code.(«é…á8ñÕ‡¾œ3
-Lpython:S1481«"-Replace unused local variable "fig" with "_".(Ø’¶x8ñÕ‡¾œ3
-Cpython:S125×"Remove this commented out code.(ìý“‰øÿÿÿÿ8ñÕ‡¾œ3
-=python:S125ß"Remove this commented out code.(¸î‹e8ñÕ‡¾œ3
->python:S125–"Remove this commented out code.(™”·ô8ñÕ‡¾œ3
-tpython:S3776 "TRefactor this function to reduce its Cognitive Complexity from 20 to the 15 allowed.(ÕÜÐ„8óÕ‡¾œ3
->python:S125ì"Remove this commented out code.(ÆÔœ¦8óÕ‡¾œ3
-Cpython:S125Å"Remove this commented out code.(˜½€­øÿÿÿÿ8óÕ‡¾œ3
-Cpython:S125Í"Remove this commented out code.(®·„àûÿÿÿÿ8óÕ‡¾œ3
-=python:S3626å"Remove this redundant return.(ÙãÞŸ8óÕ‡¾œ3
-Cpython:S125õ"Remove this commented out code.(®º¥ÿÿÿÿÿ8óÕ‡¾œ3
-Cpython:S125Û"Remove this commented out code.(¢þ Ëÿÿÿÿÿ8óÕ‡¾œ3
->python:S125ô"Remove this commented out code.(§äÞØ8óÕ‡¾œ3
-Cpython:S125ü"Remove this commented out code.(œ–•¹ÿÿÿÿÿ8óÕ‡¾œ3

@@ -3,3 +3,38 @@
 /venv/
 /Echele/
 /build/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+build/
+dist/
+
+# === Virtual env ===
+venv/
+.env/
+env/
+.venv/
+
+# === IDEs and editors ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === System ===
+.DS_Store
+Thumbs.db
+
+# === Logs, cache, temp ===
+*.log
+logs/
+tmp/
+.cache/
+*.bak
+*.tmp
