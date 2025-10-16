@@ -1,0 +1,19 @@
+
+Bpython:S125"Remove this commented out code.(øÛ«¡üÿÿÿÿ8õ‹Ú€…3
+kpython:S117/"MRename this parameter "N" to match the regular expression ^[_a-z][a-z0-9_]*$.(Ë»¾·8õ‹Ú€…3
+ppython:S1175"MRename this parameter "N" to match the regular expression ^[_a-z][a-z0-9_]*$.(ÙÊêéøÿÿÿÿ8õ‹Ú€…3
+kpython:S117G"MRename this parameter "N" to match the regular expression ^[_a-z][a-z0-9_]*$.(¸õ¾8õ‹Ú€…3
+kpython:S117O"MRename this parameter "N" to match the regular expression ^[_a-z][a-z0-9_]*$.(èËÄµ8õ‹Ú€…3
+kpython:S117W"MRename this parameter "N" to match the regular expression ^[_a-z][a-z0-9_]*$.(÷»§8õ‹Ú€…3
+kpython:S117u"MRename this parameter "N" to match the regular expression ^[_a-z][a-z0-9_]*$.(´ØŠ¥8õ‹Ú€…3
+Opython:S1481„"/Replace unused local variable "y_max" with "_".(­Ÿâ²8õ‹Ú€…3
+Opython:S1481„"/Replace unused local variable "y_min" with "_".(­Ÿâ²8õ‹Ú€…3
+lpython:S117—"MRename this parameter "N" to match the regular expression ^[_a-z][a-z0-9_]*$.(¯ô¨8»šÊº…3
+Upython:S1481³"0Replace unused local variable "x_min2" with "_".(Ó’¾øÿÿÿÿ8»šÊº…3
+Ppython:S1481²"0Replace unused local variable "crash2" with "_".(í™¾Î8»šÊº…3
+Ppython:S1481²"0Replace unused local variable "crash1" with "_".(í™¾Î8»šÊº…3
+lpython:S1226—"LIntroduce a new variable or use its initial value before reassigning 'alfa'.(¯ô¨8»šÊº…3
+lpython:S117Í"MRename this parameter "N" to match the regular expression ^[_a-z][a-z0-9_]*$.(ĞˆÕÜ8»šÊº…3
+tpython:S3776Í"TRefactor this function to reduce its Cognitive Complexity from 30 to the 15 allowed.(ĞˆÕÜ8»šÊº…3
+{python:S117"WRename this local variable "N_vals" to match the regular expression ^[_a-z][a-z0-9_]*$.(´›ííÿÿÿÿÿ8»šÊº…3
+qpython:S117Ô"MRename this parameter "N" to match the regular expression ^[_a-z][a-z0-9_]*$.( ˆ•İıÿÿÿÿ8»šÊº…3
