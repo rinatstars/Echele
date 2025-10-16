@@ -21,9 +21,9 @@ from lib.echelle.dataClasses import ConfigOGF
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-SETTINGS_FILENAME = os.path.join(".echele_settings.json")
+SETTINGS_FILENAME = os.path.join(".echelle_settings.json")
 
-class EcheleGUI:
+class EchelleGUI:
     """Класс графического интерфейса для управления устройством"""
 
     def __init__(self, ogfinder: OptimalGratingFinder):
@@ -352,7 +352,7 @@ class EcheleGUI:
             )
 
             # Вычисление эшеллеграммы
-            self.echellegramma_orders = ech_drawer.draw_echelegramma(use_multiprocessing=True)
+            self.echellegramma_orders = ech_drawer.draw_echellegramma(use_multiprocessing=True)
             if not self.echellegramma_orders:
                 logger.debug("⚠️ Не удалось построить эшеллеграмму: нет валидных порядков.")
                 return

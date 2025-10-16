@@ -174,7 +174,7 @@ class EchellegrammaDrawer:
         self.dx = 0 if dx is None else dx
         self.dy = 0 if dy is None else dy
 
-    def draw_echelegramma(self, use_multiprocessing: bool = True) -> List[OrderEdges]:
+    def draw_echellegramma(self, use_multiprocessing: bool = True) -> List[OrderEdges]:
         """
         Собирает все порядки, выравнивает эшеллеграмму по правилам (по X — среднее -> 0,
         по Y — y_min максимального порядка -> dy), делает обрезку и возвращает список OrderEdges.
@@ -268,7 +268,7 @@ class EchellegrammaDrawer:
 
     # _evaluate_k можно удалить (оставлен для совместимости, но уже не используется)
     def _evaluate_k(self, k: int, df_avg: float):
-        raise NotImplementedError("_evaluate_k устарел — используйте evaluate_k_worker и draw_echelegramma.")
+        raise NotImplementedError("_evaluate_k устарел — используйте evaluate_k_worker и draw_echellegramma.")
 
     # def _evaluate_k(
     #         self, k: int, df_avg: float
