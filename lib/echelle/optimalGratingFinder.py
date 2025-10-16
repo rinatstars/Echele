@@ -1,23 +1,24 @@
 from __future__ import annotations
 
 import math
+import os
 import logging
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
-from tkinter import ttk
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 import numpy as np
 from multiprocessing import Pool, cpu_count, get_context
-from lib.echele.dataClasses import (
+from lib.echelle.dataClasses import (
     Grating, Prism, Spectrometer,
     EvaluationResult, ConfigOGF
 )
-from lib.echele.echeleMath import (
+from lib.echelle.echelleMath import (
     lambda_range, diffraction_angle,
     angle_diffraction_prism,
     lambda_from_diffraction_angle,
     find_orders_range, find_order_edges,
     prism_incidence_angle_rad,
-    grating_groove_tilt_rad
+    grating_groove_tilt_rad,
+    lambda_center_k
 )
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ def clipped_spectral_loss_for_order(
     f: float,
     lines_in_mm: float,
     gamma_rad: float,
+    grating_cross_tilt_rad: float,
     prism_rad: float,
     a: float,
     phi2: float,
@@ -71,7 +73,7 @@ def clipped_spectral_loss_for_order(
     df_prism_min: float,
     matrix_size: float,
     glass_type: str,
-) -> Tuple[float, float, float, Tuple[float, float], Tuple[float, float]]:
+) -> Tuple[float, float, float, Tuple[float, float], Tuple[float, float], Tuple[float, float]]:
     """
     Для порядка k:
     - строим спектральную линию ±10% от λ_center,
@@ -80,7 +82,8 @@ def clipped_spectral_loss_for_order(
     """
     # find_order_edges returns x_min, y_min, x_max, y_max, lambdamin, lambdamax
     x_min, _, x_max, _, lammin, lammax = find_order_edges(
-        k, prism_rad, a, phi2, f, lines_in_mm, gamma_rad, df_avg, df_prism_min, glass_type
+        k, prism_rad, a, phi2, f, lines_in_mm, gamma_rad, grating_cross_tilt_rad,
+        df_avg, df_prism_min, glass_type
     )
 
     # if any None, propagate None (caller should handle)
@@ -95,13 +98,13 @@ def clipped_spectral_loss_for_order(
     half = float(matrix_size) / 2.0
     xs_clip = np.clip(xs, -half, half)
     df_clip = df_avg - np.arcsin(xs_clip / float(f))
-    lam_clip = lambda_from_diffraction_angle(k, df_clip, lines_in_mm, gamma_rad)
+    lam_clip = lambda_from_diffraction_angle(k, df_clip, lines_in_mm, gamma_rad + grating_cross_tilt_rad)
 
     lam_vis = float(np.nanmax(lam_clip) - np.nanmin(lam_clip))
     lam_lost_left = (float(lams.min()), float(np.nanmin(lam_clip)))
     lam_lost_right = (float(np.nanmax(lam_clip)), float(lams.max()))
     lam_lost = float(lam_full - lam_vis)
-    return lam_full, lam_vis, lam_lost, lam_lost_left, lam_lost_right
+    return lam_full, lam_vis, lam_lost, lam_lost_left, lam_lost_right, lam_clip
 
 
 def compute_spectral_losses(
@@ -110,6 +113,7 @@ def compute_spectral_losses(
     f: float,
     lines_in_mm: float,
     gamma_rad: float,
+    grating_cross_tilt_rad: float,
     prism_rad: float,
     a: float,
     phi2: float,
@@ -118,7 +122,8 @@ def compute_spectral_losses(
     matrix_size: float,
     glass_type: str,
     max_lost_line: Optional[int] = None,
-) -> Optional[Tuple[float, float, float, int, List[Tuple[float, str]],List[Tuple[float, str]]]]:
+) -> Optional[
+    tuple[float, float, float, int, list[tuple[Any, ...]], list[tuple[Any, ...]], dict[int, tuple[float, float]]]]:
     """
     Compute totals for spectral coverage across orders [kmin..kmax].
     Uses _SPECTRA_LINES global (initialized in worker via init_worker).
@@ -134,10 +139,14 @@ def compute_spectral_losses(
     lost_line_list: List[Tuple[Any, ...]] = []
     vis_line_list: List[Tuple[Any, ...]] = []
 
+    orders_in_lambda = {}
+
     for k in range(kmin, kmax + 1):
-        lam_f, lam_v, lam_l, lam_l_left, lam_l_right = clipped_spectral_loss_for_order(
-            k, f, lines_in_mm, gamma_rad, prism_rad, a, phi2, df_avg, df_prism_min, matrix_size, glass_type
+        lam_f, lam_v, lam_l, lam_l_left, lam_l_right, lam_clip = clipped_spectral_loss_for_order(
+            k, f, lines_in_mm, gamma_rad, grating_cross_tilt_rad,  prism_rad, a, phi2, df_avg, df_prism_min, matrix_size, glass_type
         )
+
+        orders_in_lambda[k] = lam_clip
 
         # Convert lam limits to nm for comparison with typical spectral line lists (which are usually in nm)
         lam_l_left_nm = np.array(lam_l_left) * 1e6
@@ -167,7 +176,7 @@ def compute_spectral_losses(
         if max_lost_line is not None and max_lost_line != 0 and total_lost_lines > max_lost_line:
             return None
 
-    return total_full, total_vis, total_lost, total_lost_lines, vis_line_list, lost_line_list
+    return total_full, total_vis, total_lost, total_lost_lines, vis_line_list, lost_line_list, orders_in_lambda
 
 
 def evaluate_grating(task: Tuple[float, float, Dict[str, Any]]) -> Optional[Spectrometer]:
@@ -194,6 +203,7 @@ def evaluate_grating(task: Tuple[float, float, Dict[str, Any]]) -> Optional[Spec
         min_dist_k = float(cfg["min_dist_k"])
         max_focal_matrix_ratio = cfg.get("max_focal_matrix_ratio")
         max_lost_line = cfg.get("max_lost_line", 0)
+        grating_cross_tilt_rad = cfg.get("grating_cross_tilt_rad", 0)
 
         # 1) диапазон порядков
         kmin, kmax = find_orders_range(line_in_mm, gamma_rad, lambda_min, lambda_max)
@@ -217,14 +227,14 @@ def evaluate_grating(task: Tuple[float, float, Dict[str, Any]]) -> Optional[Spec
         # We'll reuse the approach from original `_find_best_prism_angle` but keep it local here.
         best: Optional[Tuple[float, float, float]] = None
         prism_alfa = 10.0
-        lambda1 = 2.0 * math.sin(gamma_rad) / line_in_mm
+        lambda1 = lambda_center_k(line_in_mm, gamma_rad, 1) * 1e-6
 
         # рассчет средней длины волны и дифракции для максимального порядка для сдвига Эшеллеграммы
         lambdamin, lambdamax = lambda_range(lambda1, kmax)
         if lambdamin is None or lambdamax is None:
             return None
         lambda_avg = (lambdamin + lambdamax) / 2
-        df_avg = diffraction_angle(kmax, lambda_avg, line_in_mm, gamma_rad)
+        df_avg = diffraction_angle(kmax, lambda_avg, line_in_mm, gamma_rad + grating_cross_tilt_rad)
 
         df_prism_min_optimal = 0.0
 
@@ -238,13 +248,13 @@ def evaluate_grating(task: Tuple[float, float, Dict[str, Any]]) -> Optional[Spec
             # находим расстояние между крайними порядками
             try:
                 _, y_min_kmin, _, y_max_kmin, _, _ = \
-                    find_order_edges(kmin, prism, a, phi2, f, line_in_mm, gamma_rad,
+                    find_order_edges(kmin, prism, a, phi2, f, line_in_mm, gamma_rad, grating_cross_tilt_rad,
                                      df_avg, df_prism_min, glass_type)
                 _, y_min_kmin_p1, _, y_max_kmin_p1, _, _ = \
-                    find_order_edges(kmin + 1, prism, a, phi2, f, line_in_mm, gamma_rad,
+                    find_order_edges(kmin + 1, prism, a, phi2, f, line_in_mm, gamma_rad, grating_cross_tilt_rad,
                                      df_avg, df_prism_min, glass_type)
                 _, y_min_kmax, _, y_max_kmax, _, _ = \
-                    find_order_edges(kmax, prism, a, phi2, f, line_in_mm, gamma_rad,
+                    find_order_edges(kmax, prism, a, phi2, f, line_in_mm, gamma_rad, grating_cross_tilt_rad,
                                      df_avg, df_prism_min, glass_type)
             except Exception:
                 y_min_kmin = y_min_kmin_p1 = y_min_kmax = y_max_kmin = y_max_kmin_p1 = y_max_kmax = None
@@ -289,15 +299,15 @@ def evaluate_grating(task: Tuple[float, float, Dict[str, Any]]) -> Optional[Spec
 
         # 4. считаем спектральные потери _SPECTRA_LINES (init_worker must have been called)
         spectral = compute_spectral_losses(
-            kmin, kmax, f, line_in_mm, gamma_rad,
+            kmin, kmax, f, line_in_mm, gamma_rad, grating_cross_tilt_rad,
             prism_rad, a, phi2, df_avg, df_prism_min_optimal,
             matrix_size, glass_type, max_lost_line
         )
 
         if spectral is None:
-            spectral = 0, 0, 0, 0, 0, 0
+            spectral = 0, 0, 0, 0, 0, 0, 0
 
-        total_full, total_vis, total_lost, total_lost_line, vis_line_list, lost_line_list = spectral
+        total_full, total_vis, total_lost, total_lost_line, vis_line_list, lost_line_list, orders_in_lambda = spectral
         if max_lost_line is not None and max_lost_line != 0 and total_lost_line > max_lost_line:
             return None
 
@@ -307,8 +317,8 @@ def evaluate_grating(task: Tuple[float, float, Dict[str, Any]]) -> Optional[Spec
         grating = Grating(
             lines_per_mm=float(line_in_mm),
             gamma_rad=float(gamma_rad),
-            gr_cross_tilt_rad=float(gamma_rad),
-            grating_tilt_deg=-7.0,
+            gr_cross_tilt_rad=float(grating_cross_tilt_rad),
+            grating_tilt_deg=-7,
         )
         prism = Prism(
             wedge_angle_rad=float(prism_rad),
@@ -335,9 +345,10 @@ def evaluate_grating(task: Tuple[float, float, Dict[str, Any]]) -> Optional[Spec
         spectrometr = Spectrometer(
             grating=grating,
             prism=prism,
-            result=result,
             focal_mm=float(f),
             matrix_size_mm=float(matrix_size),
+            result=result,
+            orders_in_lambda=orders_in_lambda,
             df_avg=float(df_avg),
             df_prism_min=float(df_prism_min_optimal),
         )
@@ -351,25 +362,36 @@ def evaluate_grating(task: Tuple[float, float, Dict[str, Any]]) -> Optional[Spec
 class OptimalGratingFinder:
     def __init__(self, config: ConfigOGF):
         """
-        :param configOGF: конфигурационный датасет для OptimalGratingFinder
-        :param lines_in_mm: количество штрихов на миллиметр дифракционной решетки
-        :param gamma_deg: угол блеска дифракционной решетки в градусах
-        :param lambda_min: минимальная длина волны
-        :param lambda_max: максимальная длина волны
-        :param lambda_ctr: основная длина волны для которой оптимизировать разрешение
-        :param matrix_size: размер детектора
-        :param glass_type: материал призмы (CaF, BaF)
-        :param slit_width: расстояние между спектральными линиями на детекторе для основной длины волны
-        :param res_limit: разрешение в нм для центральной длины волны
-        :param max_focal: максимальное фокусное расстояние до детектора
-        :param min_dist_k: минимальное расстояние между минимальными порядками
-        :param max_focal_matrix_ratio: максимальное отношение между фокусом и размером детектора
-        :param max_lost_line: максимальная возможная потеря из списка спектральных линий. 0 - без ограничений
+        :param config: конфигурационный датасет для OptimalGratingFinder
         """
+        self.spectra_lines_list = None
+        self.load_config(config)
+        self.vis_los_lines = None
+        self.grating_cross_tilt_rad = math.radians(config.grating_cross_tilt_deg)
+
+        # runtime populated
+        self.spectra_lines_list: Optional[np.ndarray] = None
+        self.spectrometers: List[Spectrometer] = []
+        self.optimal_grating_dataframe: Optional[pd.DataFrame] = None
+
+    def load_spectra_lines_list_from_excel(self, filename: str) -> None:
+        """
+        Load spectral lines table from Excel. Expected format: array-like with wavelength in column 1 (nm).
+        """
+
+        try:
+            if not os.path.exists(filename):
+                logger.info("Файл со списком спектральных линий не найден: %s", filename)
+                return
+            df = pd.read_excel(filename)
+            self.spectra_lines_list = df.values
+        except Exception as e:
+            logger.warning("Ошибка чтения файла со списком спектральных линий: %s", e, exc_info=True)
+
+    def load_config(self, config: ConfigOGF):
         self.config = config
         self.lines_in_mm = config.lines_in_mm
         self.gamma_rad = np.radians(config.gamma_deg)
-        self.spectra_lines_list = None
         self.lambda_min = config.lambda_min
         self.lambda_max = config.lambda_max
         self.lambda_ctr = config.lambda_ctr
@@ -381,19 +403,6 @@ class OptimalGratingFinder:
         self.min_dist_k = config.min_dist_k
         self.max_focal_matrix_ratio = config.max_focal_matrix_ratio
         self.max_lost_line = config.max_lost_line
-        self.vis_los_lines = None
-
-        # runtime populated
-        self.spectra_lines_list: Optional[np.ndarray] = None
-        self.spectrometers: List[Spectrometer] = []
-        self.optimal_grating_dataframe: Optional[pd.DataFrame] = None
-
-    def load_spectra_lines_list_from_excel(self, filename: str) -> None:
-        """
-        Load spectral lines table from Excel. Expected format: array-like with wavelength in column 1 (nm).
-        """
-        df = pd.read_excel(filename)
-        self.spectra_lines_list = df.values
 
     def _build_worker_config(self) -> Dict[str, Any]:
         """
@@ -414,25 +423,26 @@ class OptimalGratingFinder:
             "min_dist_k": float(self.min_dist_k),
             "max_focal_matrix_ratio": self.max_focal_matrix_ratio,
             "max_lost_line": self.max_lost_line,
+            "grating_cross_tilt_rad": self.grating_cross_tilt_rad
         }
 
     def search_optimal(
             self,
             save_excel: bool = False,
-            progress: ttk.Progressbar = None,
+            progress_callback: Optional[callable] = None,
             use_spawn: bool = True,
             chunksize: int = 1,
     ) -> Optional[Tuple[pd.DataFrame, Optional[Spectrometer], Optional[Spectrometer]]]:
         """Перебираем line_in_mm (1) и gamma (0.5°) в параллели.
         :param save_excel: bool=False сохранить файл .xlsx
-        :param progress: ttk.Progressbar | None для отображения прогресса
+        :param progress_callback: callback | None для отображения прогресса
         :param use_spawn: use spawn context (Windows-safe). If False uses default context.
         :param chunksize: chunksize for imap_unordered (1 => most responsive)
         :return: DataFrame список оптимальных решоток или None если ничего не найдено
         """
 
-        line_in_mm_vals = np.arange(self.lines_in_mm[0], self.lines_in_mm[1], 0.1)
-        gamma_vals = np.arange(self.gamma_rad[0], self.gamma_rad[1], np.radians(0.5))
+        line_in_mm_vals: np.ndarray = np.arange(self.lines_in_mm[0], self.lines_in_mm[1], 0.1)
+        gamma_vals: np.ndarray = np.arange(self.gamma_rad[0], self.gamma_rad[1], np.radians(0.5))
 
         # assemble tasks: send gamma in radians to workers
         tasks: List[Tuple[float, float, Dict[str, Any]]] = []
@@ -445,20 +455,21 @@ class OptimalGratingFinder:
         if total == 0:
             return None
 
+        done = 0
+
+        # Если progress_callback is None, передать no-op
+        if progress_callback is None:
+            def _noop_done(done, total): pass
+            progress_callback = _noop_done
+
+        # Убедиться что progress_callback is callable
+        if not callable(progress_callback):
+            raise TypeError("progress_callback must be callable or None")
+
         # prepare worker initializer args
         init_args = (self.spectra_lines_list,) if self.spectra_lines_list is not None else (None,)
 
-        # prepare progressbar if provided
-        if progress is not None:
-            try:
-                progress["maximum"] = total
-                progress["value"] = 0
-            except Exception:
-                # progress API mismatch -> ignore
-                pass
-
         results: List[Spectrometer] = []
-        done = 0
 
         # choose context
         ctx = get_context("spawn") if use_spawn else get_context()
@@ -474,18 +485,22 @@ class OptimalGratingFinder:
                         results.append(res)
                     done += 1
                     # update progressbar safely (main thread)
-                    if progress is not None:
-                        try:
-                            progress["value"] = done
-                            # if it's a ttk.Progressbar use update_idletasks to refresh
-                            getattr(progress, "update_idletasks", lambda: None)()
-                        except Exception:
-                            # ignore progress update errors
-                            pass
+                    try:
+                        progress_callback(done, total)
+                    except Exception:
+                        # never allow progress updates to break the loop
+                        pass
         else:
-            init_worker(init_args)
+            init_worker(*init_args) if isinstance(init_args, tuple) else init_worker(init_args)
             for task in tasks:
-                results.append(evaluate_grating(task))
+                res = evaluate_grating(task)
+                if res is not None:
+                    results.append(res)
+                done += 1
+                try:
+                    progress_callback(done, total)
+                except Exception:
+                    pass
 
         valid = [r for r in results if r is not None]
 

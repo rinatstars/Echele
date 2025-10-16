@@ -90,9 +90,9 @@ def lambda_range(lambda1, k) -> tuple[float, float] | tuple[None, None]:
 
 
 @lru_cache(maxsize=4096)
-def lambda_center_k(lines_in_mm: float, gamma: float, k: int) -> float:
+def lambda_center_k(lines_in_mm: float, gamma_rad: float, k: int) -> float:
     """Центральная длина волны (нм) для порядка k."""
-    return (2 * math.sin(gamma) / lines_in_mm) * 1e6 / k
+    return (2 * math.sin(gamma_rad) / lines_in_mm) * 1e6 / k
 
 
 @lru_cache(maxsize=4096)
@@ -115,24 +115,31 @@ def find_orders_range(
 
 
 @lru_cache(maxsize=4096)
-def diffraction_angle(k: int, lam: float, lines_in_mm: float, gamma: float) -> float | None:
+def diffraction_angle(k: int, lam: float, lines_in_mm: float, gamma_rad: float, alfa_rad: float = 0.0) -> float | None:
     """
     Угол дифракции решётки (радианы).
 
     :param k: порядок дифракции
     :param lam: длина волны
     :param lines_in_mm: количество штрихов на мм
-    :param gamma: угол блеска
+    :param gamma_rad: угол блеска
+    :param alfa_rad: угол наклона решетки вдоль штриха
     """
-    s = k * lam * lines_in_mm - math.sin(gamma)
-    return (math.asin(s) - gamma) if -1 <= s <= 1 else None
+    s = (k * lam * lines_in_mm) / math.cos(alfa_rad) - math.sin(gamma_rad)
+    return (math.asin(s) - gamma_rad) if -1 <= s <= 1 else None
 
 
 def lambda_from_diffraction_angle(
-        k: int, df: float, line_in_mm: float, phi: float
+        k: int, df: float, lines_in_mm: float, gamma: float, alfa: float = 0.0
 ) -> np.ndarray:
-    """Обратное уравнение решётки: df→λ."""
-    return (np.sin(df + phi) + np.sin(phi)) / (k * line_in_mm)
+    """Обратное уравнение решётки: df→λ.
+    :param k: порядок дифракции
+    :param df: угол дифракции
+    :param lines_in_mm: количество штрихов на мм
+    :param gamma: угол блеска
+    :param alfa: угол наклона решетки вдоль штриха
+    """
+    return (np.sin(df + gamma) + np.sin(gamma)) * math.cos(alfa) / (k * lines_in_mm)
 
 
 @lru_cache(maxsize=4096)
@@ -171,8 +178,8 @@ def angle_diffraction_prism(lambdy: float, prism: float, glass_type: str,
 def find_order_edges(
         k: int, prism: float,
         phi: float, phi2: float, f: float, lines_in_mm: float,
-        gamma:  float, df_avg: float, df_prism_min: float,
-        glass_type: str
+        gamma:  float, grating_cross_tilt_rad: float, df_avg: float,
+        df_prism_min: float, glass_type: str
 ) -> ([float, float, float, float, float, float] |
       [None, None, None, None, None, None]):
     """
@@ -185,6 +192,7 @@ def find_order_edges(
     :param f: фокус
     :param lines_in_mm: количество штрихов на мм
     :param gamma: угол блеска
+    :param grating_cross_tilt_rad: у
     :param df_avg: серединная дифракция для центровки
     :param df_prism_min: дифракция призмы для минимальной длины волны
     :param glass_type: тип стекла призмы ("CaF")
@@ -209,7 +217,7 @@ def find_order_edges(
         l1 = f * math.sin(e)
         y.append(l1)
 
-        df_value = diffraction_angle(k, lambdy, lines_in_mm, gamma)
+        df_value = diffraction_angle(k, lambdy, lines_in_mm, gamma + grating_cross_tilt_rad)
         if df_value is None:
             return None, None, None, None, None, None
 
@@ -226,6 +234,7 @@ def wavelength_to_detector_coords(
         f_mm: float,
         lines_in_mm: float,
         gamma_rad: float,
+        grating_cross_tilt_rad: float,
         prism_tilt_deg: float,
         prism_wedge_angle_rad: float,
         df_avg: float,
@@ -250,6 +259,7 @@ def wavelength_to_detector_coords(
     :param f_mm: фокус
     :param lines_in_mm:  количество штрихов на мм
     :param gamma_rad: угол блеска, рад
+    :param grating_cross_tilt_rad: угол наклона решетки поперек штриха от угла блеска
     :param prism_tilt_deg: угол наклона призмы из Земакс
     :param prism_wedge_angle_rad: угол клина призмы
     :param df_avg: серединная дифракция для центровки
@@ -284,7 +294,7 @@ def wavelength_to_detector_coords(
     y_mm = -float(f_mm) * math.sin(e)
 
     # 4) diffraction angle for grating
-    df_value = diffraction_angle(k, lambda_mm, lines_in_mm, gamma_rad)
+    df_value = diffraction_angle(k, lambda_mm, lines_in_mm, gamma_rad + grating_cross_tilt_rad)
     if df_value is None:
         return None
 

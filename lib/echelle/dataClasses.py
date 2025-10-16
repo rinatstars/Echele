@@ -60,16 +60,6 @@ class EvaluationResult:
 
 
 @dataclass(frozen=True)
-class Spectrometer:
-    grating: Grating
-    prism: Prism
-    result: Optional[EvaluationResult]
-    focal_mm: float
-    matrix_size_mm: float
-    df_avg: float = 0.0
-    df_prism_min: float = 0.0
-
-@dataclass(frozen=True)
 class ConfigOGF:
     """
         Конфигурационные параметры оптимизатора эшелле-спектрометра (OptimalGratingFinder).
@@ -105,8 +95,8 @@ class ConfigOGF:
             Максимально допустимое отношение фокусного расстояния к размеру матрицы (по умолчанию None).
         max_lost_line : int, optional
             Максимально допустимое число потерянных спектральных линий (по умолчанию None).
-        grating_cross_tilt_deg : float, default=6
-            Поперечный наклон эшелле-решётки относительно входной щели, градусы.
+        grating_cross_tilt_deg : float, default=-5.5
+            Поперечный наклон эшелле-решётки относительно штриха, градусы.
         """
     lines_in_mm: [float, float]
     gamma_deg: [float, float]
@@ -121,4 +111,33 @@ class ConfigOGF:
     min_dist_k: float
     max_focal_matrix_ratio: int = None
     max_lost_line: int = None
-    grating_cross_tilt_deg: float = 6
+    grating_cross_tilt_deg: float = -5.5
+
+
+@dataclass
+class OrderEdges:
+    k: int
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
+    x_min_clipped: float
+    x_max_clipped: float
+    y_min_clipped: float
+    y_max_clipped: float
+
+
+@dataclass(frozen=True)
+class Spectrometer:
+    grating: Grating
+    prism: Prism
+    focal_mm: float
+    matrix_size_mm: float
+    config: Optional[ConfigOGF] = None
+    result: Optional[EvaluationResult] = None
+    orders_in_lambda: Optional[dict[int, tuple[float, float]]] = None
+    df_avg: float = 0.0
+    df_prism_min: float = 0.0
+
+
+

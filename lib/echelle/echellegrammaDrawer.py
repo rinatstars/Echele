@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 import numpy as np
 import multiprocessing as mp
-from  lib.echele.dataClasses import (
-    Grating, Prism, Spectrometer,
-    EvaluationResult
+from  lib.echelle.dataClasses import (
+    OrderEdges, Spectrometer
 )
-from lib.echele.echeleMath import (
+from lib.echelle.echelleMath import (
     lambda_range, diffraction_angle,
     find_order_edges,
     prism_incidence_angle_rad,
@@ -28,19 +28,6 @@ class RawOrderEdges:
     x_max: float
     y_min: float
     y_max: float
-
-
-@dataclass
-class OrderEdges:
-    k: int
-    x_min: float
-    x_max: float
-    y_min: float
-    y_max: float
-    x_min_clipped: float
-    x_max_clipped: float
-    y_min_clipped: float
-    y_max_clipped: float
 
 
 def _clip_to_detector(xs: np.ndarray, ys: np.ndarray, matrix_size: float, dx: float, dy: float
@@ -100,6 +87,7 @@ def evaluate_k_worker(
     focal: float,
     lines_in_mm: float,
     gamma_rad: float,
+    grating_cross_tilt_rad: float,
     df_avg: float,
     df_prism_min: float,
     glass_type: str,
@@ -119,6 +107,7 @@ def evaluate_k_worker(
             focal,
             lines_in_mm,
             gamma_rad,
+            grating_cross_tilt_rad,
             df_avg,
             df_prism_min,
             glass_type,
@@ -134,9 +123,9 @@ def evaluate_k_worker(
         return None
 
 
-class EchelegrammaDrawer:
+class EchellegrammaDrawer:
     def __init__(self,
-                 spectrometr: Spectrometer,
+                 spectrometer: Spectrometer,
                  matrix_size: float, dx: float = None, dy: float = None):
         """
 
@@ -156,28 +145,29 @@ class EchelegrammaDrawer:
         :param dx: сдвиг эшеллеграммы по X
         :param dy: сдвиг эшеллеграммы по Y
         """
-        self.lines_in_mm = spectrometr.result.N
-        self.gamma_rad = spectrometr.grating.gamma_rad
-        self.k_min = spectrometr.result.kmin
-        self.k_max = spectrometr.result.kmax
-        self.focal = spectrometr.result.f_mm
-        self.prism_wedge_angle_rad = np.radians(spectrometr.result.prism_deg)
-        self.glass_type = spectrometr.prism.glass_type
-        self.gap_mm = spectrometr.result.gap_mm
-        self.df_avg = spectrometr.df_avg
-        self.df_prism_min = spectrometr.df_prism_min
+        self.lines_in_mm = spectrometer.result.N
+        self.gamma_rad = spectrometer.grating.gamma_rad
+        self.grating_cross_tilt_rad = spectrometer.grating.gr_cross_tilt_rad
+        self.k_min = spectrometer.result.kmin
+        self.k_max = spectrometer.result.kmax
+        self.focal = spectrometer.result.f_mm
+        self.prism_wedge_angle_rad = math.radians(spectrometer.result.prism_deg)
+        self.glass_type = spectrometer.prism.glass_type
+        self.gap_mm = spectrometer.result.gap_mm
+        self.df_avg = spectrometer.df_avg
+        self.df_prism_min = spectrometer.df_prism_min
         self.matrix_size = matrix_size
-        self.grating_tilt_deg = spectrometr.grating.grating_tilt_deg
-        self.prism_tilt_deg = spectrometr.prism.tilt_deg
+        self.grating_tilt_deg = spectrometer.grating.grating_tilt_deg
+        self.prism_tilt_deg = spectrometer.prism.tilt_deg
         # угол падения на призму
         self.prism_incidence_angle_rad = prism_incidence_angle_rad(
             prism_tilt_deg=self.prism_tilt_deg,
-            prism_wedge_angle_rad=self.prism_wedge_angle_rad
+            prism_wedge_angle_rad=float(self.prism_wedge_angle_rad)
         )
 
         # угол наклона решетки вдоль штриха
         self.grating_groove_tilt_rad = grating_groove_tilt_rad(
-            prism_wedge_angle_rad=self.prism_wedge_angle_rad,
+            prism_wedge_angle_rad=float(self.prism_wedge_angle_rad),
             prism_tilt_deg=self.prism_tilt_deg,
             grating_tilt_deg=self.grating_tilt_deg
         )
@@ -204,6 +194,7 @@ class EchelegrammaDrawer:
                 float(self.focal),
                 float(self.lines_in_mm),
                 float(self.gamma_rad),
+                float(self.grating_cross_tilt_rad),
                 float(self.df_avg),
                 float(self.df_prism_min),
                 str(self.glass_type),

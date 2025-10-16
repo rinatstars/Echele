@@ -1,10 +1,10 @@
-from lib.echele.optimalGratingFinder import OptimalGratingFinder
+import logging
+from lib.echelle.optimalGratingFinder import OptimalGratingFinder
 from lib.gui.gui import EcheleGUI
-from lib.echele.dataClasses import (
+from lib.echelle.zmx_echelle_editor import ZmxEchelleEditor
+from lib.echelle.dataClasses import (
     ConfigOGF
 )
-
-
 
 # === Константы ===
 LIMIT = 10.4  # полуширина матрицы (мм)
@@ -21,20 +21,20 @@ LAMBDA_MAX = 780  # нм
 LAMBDA_CTR = 200  # нм
 
 
+
 def main():
-    configOGF = ConfigOGF([70, 120], [40,80], LAMBDA_MIN, LAMBDA_MAX, LAMBDA_CTR,
-                               LIMIT*2, "CaF", SLIT_WIDTH, RES_LIMIT, MAX_FOCAL, MIN_DIST, MAX_RATIO, MAX_LOST_LINE)
+    configOGF = ConfigOGF([70, 120], [40, 80], LAMBDA_MIN, LAMBDA_MAX, LAMBDA_CTR,
+                          LIMIT * 2, "CaF", SLIT_WIDTH, RES_LIMIT, MAX_FOCAL, MIN_DIST, MAX_RATIO, MAX_LOST_LINE)
     ogf = OptimalGratingFinder(configOGF)
-    ogf.load_spectra_lines_list_from_excel("spectral_line_list.xlsx")
     gui = EcheleGUI(ogf)
     gui.run()
 
 
 if __name__ == '__main__':
     import multiprocessing as mp
+
     mp.freeze_support()
     main()
-
 
 # lines_list = [
 #     {"Element": "Ar", "lambda": 451.0733},

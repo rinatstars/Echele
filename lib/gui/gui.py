@@ -1,34 +1,39 @@
 """Модуль графического интерфейса"""
 import math
-
-import matplotlib
+import os
+import json
+import logging
 import matplotlib.pyplot as plt
 import pandas as pd
 import threading
 import tkinter as tk
 from tkinter import *
-from tkinter import Tk, BooleanVar, StringVar, IntVar, Menu, DoubleVar
-from tkinter import ttk
-
-import numpy as np
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from lib.echele.optimalGratingFinder import OptimalGratingFinder
-from lib.echele.echelegrammaDrawer import EchelegrammaDrawer
-from lib.echele.echeleMath import (
-    find_orders_range, wavelength_to_detector_coords,
+from tkinter import ttk, Tk, BooleanVar, StringVar, IntVar, Menu, DoubleVar, messagebox, filedialog
+from lib.echelle.optimalGratingFinder import OptimalGratingFinder
+from lib.echelle.echellegrammaDrawer import EchellegrammaDrawer
+from lib.echelle.zmx_echelle_editor import ZmxEchelleEditor
+from lib.echelle.echelleMath import (
+    wavelength_to_detector_coords,
     grating_groove_tilt_rad
 )
+from lib.echelle.dataClasses import ConfigOGF
 
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
+SETTINGS_FILENAME = os.path.join(".echele_settings.json")
 
 class EcheleGUI:
     """Класс графического интерфейса для управления устройством"""
 
     def __init__(self, ogfinder: OptimalGratingFinder):
         self.ogfinder = ogfinder
+        self.config: ConfigOGF = self.ogfinder.config
         self.window = Tk()
         self._setup_window()
         self._init_variables()
+        # Загружаем сохранённые настройки (если есть) — применяет значения к переменным
+        self._load_settings()
         self._setup_ui()
 
     def _setup_window(self):
@@ -39,7 +44,7 @@ class EcheleGUI:
 
     def _init_variables(self):
         """Инициализация переменных интерфейса"""
-
+        self.last_spectral_line_file = "spectral_line_list.xlsx"
         self.lines_in_mm = [IntVar(value=80), IntVar(value=120)]
         self.gamma = [IntVar(value=40), IntVar(value=80)]
         self.limit = DoubleVar(value=10.4)  # полуширина матрицы (мм)
@@ -49,18 +54,136 @@ class EcheleGUI:
         self.max_focal = IntVar(value=800)  # мм
         self.max_ratio = IntVar(value=10)  # f / (2*LIMIT) < 15
         self.min_dist = DoubleVar(value=0.08)  # расстояние между порядками
-        self.max_lost_line = IntVar(value=0)  # максимальная возможная потеря из списка спектральных линий. 0 - без ограничений
+        self.max_lost_line = IntVar(
+            value=0)  # максимальная возможная потеря из списка спектральных линий. 0 - без ограничений
 
         self.lambda_min = IntVar(value=167)  # нм
         self.lambda_max = IntVar(value=780)  # нм
         self.lambda_ctr = IntVar(value=200)  # нм
 
-        self.draw_line = BooleanVar(value=True)     # выводить список спектральных линий на эшелеграмме
-        self.draw_line_lambda = BooleanVar(value=True)     # подписывать длины волн
+        self.draw_line = BooleanVar(value=True)  # выводить список спектральных линий на эшелеграмме
+        self.draw_line_lambda = BooleanVar(value=True)  # подписывать длины волн
 
         self.optimal_grating_dataframe = None
+        self.active_spectrometer = None
+        self.echellegramma_orders = None
 
         self.progress = None
+
+    def _load_settings(self, path: str = SETTINGS_FILENAME):
+        """
+        Загружает настройки из JSON и применяет их к tk.Variable.
+        Если файла нет или он битый — ничего не меняем.
+        """
+        try:
+            if not os.path.exists(path):
+                logger.debug("Settings file not found: %s", path)
+                return
+
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as exc:
+            logger.warning("Не удалось загрузить настройки %s: %s", path, exc, exc_info=True)
+            return
+
+        try:
+            # Простые числовые/строковые поля
+            if "limit" in data:
+                self.limit.set(data["limit"])
+            if "glass_type" in data:
+                self.glass_type.set(data["glass_type"])
+            if "slit_width" in data:
+                self.slit_width.set(data["slit_width"])
+            if "res_limit" in data:
+                self.res_limit.set(data["res_limit"])
+            if "max_focal" in data:
+                self.max_focal.set(data["max_focal"])
+            if "max_ratio" in data:
+                self.max_ratio.set(data["max_ratio"])
+            if "min_dist" in data:
+                self.min_dist.set(data["min_dist"])
+            if "max_lost_line" in data:
+                self.max_lost_line.set(data["max_lost_line"])
+
+            if "lambda_min" in data:
+                self.lambda_min.set(data["lambda_min"])
+            if "lambda_max" in data:
+                self.lambda_max.set(data["lambda_max"])
+            if "lambda_ctr" in data:
+                self.lambda_ctr.set(data["lambda_ctr"])
+
+            # Списковые поля: lines_in_mm и gamma
+            if "lines_in_mm" in data and isinstance(data["lines_in_mm"], (list, tuple)) and len(
+                    data["lines_in_mm"]) >= 2:
+                self.lines_in_mm[0].set(int(data["lines_in_mm"][0]))
+                self.lines_in_mm[1].set(int(data["lines_in_mm"][1]))
+
+            if "gamma" in data and isinstance(data["gamma"], (list, tuple)) and len(data["gamma"]) >= 2:
+                self.gamma[0].set(int(data["gamma"][0]))
+                self.gamma[1].set(int(data["gamma"][1]))
+
+            # Булевы переключатели
+            if "draw_line" in data:
+                self.draw_line.set(bool(data["draw_line"]))
+            if "draw_line_lambda" in data:
+                self.draw_line_lambda.set(bool(data["draw_line_lambda"]))
+
+            # Восстановление геометрии окна (опционально)
+            if "window_geometry" in data:
+                try:
+                    self.window.geometry(data["window_geometry"])
+                except Exception:
+                    pass
+
+            # Загрузка файла с линиями используемыми последний раз
+            if "last_spectral_line_file" in data:
+                try:
+                    self.last_spectral_line_file = data["last_spectral_line_file"]
+                except Exception:
+                    pass
+            try:
+                self.ogfinder.load_spectra_lines_list_from_excel(self.last_spectral_line_file)
+            except Exception as e:
+                logger.warning("Ошибка чтения файла со списком спектральных линий: %s", e, exc_info=True)
+
+            logger.info("Loaded settings from %s", path)
+        except Exception as exc:
+            logger.warning("Ошибка применения настроек: %s", exc, exc_info=True)
+
+    def _save_settings(self, path: str = SETTINGS_FILENAME):
+        """
+        Сохраняет текущие значения интерфейса в JSON-файл.
+        """
+        try:
+            settings = {
+                "lines_in_mm": [int(self.lines_in_mm[0].get()), int(self.lines_in_mm[1].get())],
+                "gamma": [int(self.gamma[0].get()), int(self.gamma[1].get())],
+                "limit": float(self.limit.get()),
+                "glass_type": str(self.glass_type.get()),
+                "slit_width": int(self.slit_width.get()),
+                "res_limit": float(self.res_limit.get()),
+                "max_focal": int(self.max_focal.get()),
+                "max_ratio": int(self.max_ratio.get()),
+                "min_dist": float(self.min_dist.get()),
+                "max_lost_line": int(self.max_lost_line.get()),
+                "lambda_min": int(self.lambda_min.get()),
+                "lambda_max": int(self.lambda_max.get()),
+                "lambda_ctr": int(self.lambda_ctr.get()),
+                "draw_line": bool(self.draw_line.get()),
+                "draw_line_lambda": bool(self.draw_line_lambda.get()),
+                "window_geometry": self.window.geometry(),
+                "last_spectral_line_file": self.last_spectral_line_file
+            }
+
+            # безопасная запись (записываем сначала в tmp, затем переименуем)
+            tmp_path = f"{path}.tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+
+            logger.info("Saved settings to %s", path)
+        except Exception as exc:
+            logger.warning("Не удалось сохранить настройки %s: %s", path, exc, exc_info=True)
 
     def _setup_ui(self):
         """Создание элементов интерфейса"""
@@ -71,7 +194,7 @@ class EcheleGUI:
         # Настройка колонок: [0] — левая, [1] — таблица, [2] — графики
         main_container.columnconfigure(0, weight=0)
         main_container.columnconfigure(1, weight=1)
-        #main_container.columnconfigure(2, weight=0)  # вывод команд — фиксированный размер
+        # main_container.columnconfigure(2, weight=0)  # вывод команд — фиксированный размер
         main_container.rowconfigure(0, weight=1)
 
         # Левая колонка (управление)
@@ -89,29 +212,10 @@ class EcheleGUI:
         # Элементы управления
         self._create_setting_frame(left_frame)
         self._progress_frame(left_frame)
+        self._zemax_frame(left_frame)
 
         # Таблица с оптимальными решетками
         self.create_table(center_frame)
-
-    def _create_graphs_frame(self, parent):
-        """Создает фрейм с графиками"""
-        frame = ttk.LabelFrame(parent, text="Эшеллеграмма", padding="5")
-        frame.pack(fill='both', expand=True, pady=5)
-
-        # Убедимся, что фигура уже создана
-        if not hasattr(self, 'canvas'):
-            self._init_graphs(frame)
-
-        # Размещаем canvas так, чтобы он занимал всё пространство фрейма
-        self.canvas.get_tk_widget().pack(fill='both', expand=True)
-
-        # Подключаем событие отрисовки
-        self.canvas.mpl_connect('draw_event', self._on_draw)
-
-    def _on_draw(self, event):
-        """Обработчик события отрисовки для сохранения фона"""
-        # self.ax1_background = self.canvas.copy_from_bbox(self.ax1.bbox)
-        # self.ax2_background = self.canvas.copy_from_bbox(self.ax2.bbox)
 
     def create_table(self, parent):
         """Создает фрейм таблицы с результатами"""
@@ -134,7 +238,7 @@ class EcheleGUI:
             columns=columns,
             show="headings",
             yscrollcommand=y_scroll.set,
-            xscrollcommand = x_scroll.set
+            xscrollcommand=x_scroll.set
         )
         self.grating_tree.pack(fill=BOTH, expand=True)
 
@@ -142,21 +246,70 @@ class EcheleGUI:
         y_scroll.config(command=self.grating_tree.yview)
         x_scroll.config(command=self.grating_tree.xview)
 
+        # словарь для хранения состояния сортировки по каждому столбцу
+        self._sort_orders = {col: False for col in columns}
+
         for column in columns:
-            self.grating_tree.heading(column, text=column)
+            self.grating_tree.heading(
+                column,
+                text=column,
+                command=lambda c=column: self._sort_treeview_column(c, not self._sort_orders[c])
+            )
             self.grating_tree.column(column, width=80, anchor=CENTER)
 
         self.grating_tree.bind("<<TreeviewSelect>>", self._on_element_select)
 
+    def _sort_treeview_column(self, col, reverse: bool):
+        """Сортировка по столбцу Treeview"""
+        try:
+            # Получаем все значения
+            data = [(self.grating_tree.set(k, col), k) for k in self.grating_tree.get_children('')]
+
+            # Попробуем сортировать как числа, если не получится — как строки
+            try:
+                data.sort(key=lambda t: float(t[0]), reverse=reverse)
+            except ValueError:
+                data.sort(key=lambda t: t[0], reverse=reverse)
+
+            # Переставляем элементы
+            for idx, (_, k) in enumerate(data):
+                self.grating_tree.move(k, '', idx)
+
+            # Меняем направление сортировки для следующего клика
+            self._sort_orders[col] = reverse
+
+            # Меняем стрелку в заголовке
+            for c in self.grating_tree["columns"]:
+                self.grating_tree.heading(c, text=c)  # сбрасываем
+            arrow = " ▲" if reverse else " ▼"
+            self.grating_tree.heading(col, text=f"{col}{arrow}")
+
+        except Exception as e:
+            logger.debug(f"⚠️ Ошибка сортировки столбца {col}: {e}", exc_info=True)
+
     def _on_element_select(self, event):
         selected = self.grating_tree.selection()
-        selected_id = self.grating_tree.index(selected[0])
         if not selected:
             return
 
+        # selected[0] — это iid строки (строка, потому используем str->int)
+        iid = selected[0]
         try:
-            # Извлечение данных о решётке
-            grating_values = self.grating_tree.item(selected[0], "values")
+            data_index = int(iid)
+        except Exception:
+            # если iid нестандартный (не число) — попробуем взять по позиции
+            try:
+                data_index = self.grating_tree.index(iid)
+            except Exception:
+                data_index = None
+
+        if data_index is None:
+            logger.warning("Не удалось определить индекс данных для выбранного элемента: %s", iid)
+            return
+
+        try:
+            # Извлечение данных о решётке (значения в строке)
+            grating_values = self.grating_tree.item(iid, "values")
             (
                 lines_in_mm_str,
                 gamma_deg_str,
@@ -168,34 +321,40 @@ class EcheleGUI:
                 *_,
             ) = grating_values
 
-            spectrometr = self.ogfinder.spectrometers[selected_id]
+            # Берём спектрометр по исходному индексу данных
+            spectrometer = self.ogfinder.spectrometers[data_index]
 
-            # Преобразование к числовым типам
-            lines_in_mm = spectrometr.result.N
-            gamma_deg = spectrometr.result.gamma_deg
-            k_min = int(spectrometr.result.kmin)
-            k_max = int(spectrometr.result.kmax)
-            focal = float(spectrometr.result.f_mm)
-            prism_wedge_angle_deg = float(spectrometr.result.prism_deg)
+            self.active_spectrometer = spectrometer
+            if self.active_spectrometer is not None:
+                self.zemax_btn.config(state=tk.NORMAL)
+
+            # Преобразование к числовым типам и остальная логика остаются без изменений
+            lines_in_mm = spectrometer.result.N
+            gamma_deg = spectrometer.result.gamma_deg
+            grating_cross_tilt_rad = spectrometer.grating.gr_cross_tilt_rad
+            k_min = int(spectrometer.result.kmin)
+            k_max = int(spectrometer.result.kmax)
+            focal = float(spectrometer.result.f_mm)
+            prism_wedge_angle_deg = float(spectrometer.result.prism_deg)
             glass_type = str(self.glass_type.get())
-            gap_mm = float(spectrometr.result.gap_mm)
-            df_avg = spectrometr.df_avg
-            df_prism_min = spectrometr.df_prism_min
+            gap_mm = float(spectrometer.result.gap_mm)
+            df_avg = spectrometer.df_avg
+            df_prism_min = spectrometer.df_prism_min
 
             dx = 0
             dy = gap_mm
             matrix_size = float(self.limit.get()) * 2.0
 
             # Создание экземпляра расчётчика эшеллеграммы
-            ech_drawer = EchelegrammaDrawer(
-                spectrometr=spectrometr,
+            ech_drawer = EchellegrammaDrawer(
+                spectrometer=spectrometer,
                 matrix_size=matrix_size,
             )
 
             # Вычисление эшеллеграммы
-            orders = ech_drawer.draw_echelegramma(use_multiprocessing=True)
-            if not orders:
-                print("⚠️ Не удалось построить эшеллеграмму: нет валидных порядков.")
+            self.echellegramma_orders = ech_drawer.draw_echelegramma(use_multiprocessing=True)
+            if not self.echellegramma_orders:
+                logger.debug("⚠️ Не удалось построить эшеллеграмму: нет валидных порядков.")
                 return
 
             # --- Построение графика ---
@@ -205,7 +364,7 @@ class EcheleGUI:
             ax.set_ylabel("y (мм)")
 
             # Построение линий порядков
-            for order in orders:
+            for order in self.echellegramma_orders:
                 ax.plot(
                     [order.x_min_clipped, order.x_max_clipped],
                     [order.y_min_clipped, order.y_max_clipped],
@@ -228,20 +387,22 @@ class EcheleGUI:
 
             phi2 = grating_groove_tilt_rad(
                 prism_wedge_angle_rad=math.radians(prism_wedge_angle_deg),
-                prism_tilt_deg=spectrometr.prism.tilt_deg,
-                grating_tilt_deg=spectrometr.grating.grating_tilt_deg
+                prism_tilt_deg=spectrometer.prism.tilt_deg,
+                grating_tilt_deg=spectrometer.grating.grating_tilt_deg
             )
 
             if self.draw_line.get():
                 for line in self.ogfinder.spectra_lines_list:
-                    x, y = wavelength_to_detector_coords(line[1], k_max, focal, lines_in_mm, math.radians(gamma_deg),
-                                                         0, np.radians(prism_wedge_angle_deg), df_avg,
-                                                         df_prism_min, glass_type,
-                                                         phi2)
+                    x, y = wavelength_to_detector_coords(
+                        line[1], k_max, focal, lines_in_mm,
+                        math.radians(gamma_deg), grating_cross_tilt_rad,
+                        0, math.radians(prism_wedge_angle_deg), df_avg,
+                        df_prism_min, glass_type,
+                        phi2
+                    )
                     ax.scatter(x, y, color="red", s=5)
                     ax.text(x, y + .05, f"{line[0]}, {line[1] if self.draw_line_lambda.get() else ''}", fontsize=6)
 
-            # Ограничения области отображения
             half_limit = float(self.limit.get())
             ax.set_xlim(-half_limit, half_limit)
             ax.set_ylim(0, 2 * half_limit)
@@ -253,93 +414,14 @@ class EcheleGUI:
             plt.show()
 
         except Exception as exc:
-            import traceback
-            print(f"❌ Ошибка при построении эшеллеграммы: {exc}")
-            traceback.print_exc()
-
-    def _update_graphs(self):
-        """Оптимизированное обновление графиков"""
-        if not (self.receive_new_temperature_data or self.receive_new_pressure_data):
-            return
-
-        try:
-            redraw_full = False
-            # Обновляем данные линий
-            if self.receive_new_temperature_data and len(self.temp_data['value']) > 0:
-                self.temp_line.set_data(range(len(self.temp_data['value'])), self.temp_data['value'])
-                old_ylim = self.ax1.get_ylim()
-                self.ax1.relim()
-                self.ax1.autoscale_view(scalex=False, scaley=True)
-                new_ylim = self.ax1.get_ylim()
-                # Проверяем: изменились ли границы Y
-                if old_ylim != new_ylim:
-                    redraw_full = True
-                else:
-                    redraw_full = False
-
-            if self.receive_new_pressure_data and len(self.pressure_data['value']) > 0:
-                self.pressure_line.set_data(range(len(self.pressure_data['value'])), self.pressure_data['value'])
-                old_ylim = self.ax2.get_ylim()
-                self.ax2.relim()
-                self.ax2.autoscale_view(scalex=False, scaley=True)
-                new_ylim = self.ax2.get_ylim()
-                # Проверяем: изменились ли границы Y
-                if old_ylim != new_ylim:
-                    redraw_full = True
-                else:
-                    redraw_full = False
-
-            if self.receive_new_position_data and len(self.position_data['value']) > 0:
-                self.position_line.set_data(range(len(self.position_data['value'])), self.position_data['value'])
-                old_ylim = self.ax3.get_ylim()
-                self.ax3.relim()
-                self.ax3.autoscale_view(scalex=False, scaley=True)
-                new_ylim = self.ax3.get_ylim()
-                # Проверяем: изменились ли границы Y
-                if old_ylim != new_ylim:
-                    redraw_full = True
-                else:
-                    redraw_full = False
-
-            # Первая отрисовка - сохраняем фон
-            if self.ax1_background is None or redraw_full:
-                self.temp_line.set_animated(True)
-                self.pressure_line.set_animated(True)
-                self.position_line.set_animated(True)
-                self.fig.canvas.draw()
-                self.ax1_background = self.canvas.copy_from_bbox(self.ax1.bbox)
-                self.ax2_background = self.canvas.copy_from_bbox(self.ax2.bbox)
-                self.ax3_background = self.canvas.copy_from_bbox(self.ax3.bbox)
-
-
-            # Последующие обновления с blitting
-            self.canvas.restore_region(self.ax1_background)
-            self.ax1.draw_artist(self.temp_line)
-            self.canvas.restore_region(self.ax2_background)
-            self.ax2.draw_artist(self.pressure_line)
-            self.canvas.restore_region(self.ax3_background)
-            self.ax3.draw_artist(self.position_line)
-
-            # Обновляем только измененные области
-            self.canvas.blit(self.ax1.bbox)
-            self.canvas.blit(self.ax2.bbox)
-            self.canvas.blit(self.ax3.bbox)
-
-        except Exception as e:
-            self.append_command_log(f"Ошибка обновления графиков: {e}")
-            # При ошибке перерисовываем полностью
-            self.canvas.draw()
-        finally:
-            self.receive_new_temperature_data = False
-            self.receive_new_pressure_data = False
-            self.receive_new_position_data = False
+            logger.debug(f"❌ Ошибка при построении эшеллеграммы: {exc}")
 
     def _create_setting_frame(self, parent):
         """Создает фрейм давления"""
         frame = ttk.LabelFrame(parent, text="Параметры оптимизации", padding="5")
         frame.pack(fill='x', pady=5)
 
-        width_entry = 7     # ширина полей для ввода значений
+        width_entry = 7  # ширина полей для ввода значений
 
         ttk.Label(frame, text="Полуширина матрицы (мм):").grid(row=0, column=0, padx=5, sticky='w')
         ttk.Entry(frame, textvariable=self.limit, width=width_entry).grid(row=0, column=1, padx=5, sticky='w')
@@ -351,7 +433,7 @@ class EcheleGUI:
         ttk.Entry(frame, textvariable=self.res_limit, width=width_entry).grid(row=3, column=1, padx=5, sticky='w')
         ttk.Label(frame, text="Максимальный фокус (мм):").grid(row=4, column=0, padx=5, sticky='w')
         ttk.Entry(frame, textvariable=self.max_focal, width=width_entry).grid(row=4, column=1, padx=5, sticky='w')
-        ttk.Label(frame, text="Макс. отнош. фокуса к ширине матрицы:").grid(row=5, column=0, padx=5, sticky='w')
+        ttk.Label(frame, text="Мин. отнош. фокуса к ширине матрицы:").grid(row=5, column=0, padx=5, sticky='w')
         ttk.Entry(frame, textvariable=self.max_ratio, width=width_entry).grid(row=5, column=1, padx=5, sticky='w')
         ttk.Label(frame, text="Расстояние между порядками (мм):").grid(row=6, column=0, padx=5, sticky='w')
         ttk.Entry(frame, textvariable=self.min_dist, width=width_entry).grid(row=6, column=1, padx=5, sticky='w')
@@ -369,11 +451,15 @@ class EcheleGUI:
         ttk.Label(frame, text="Угол блеска:").grid(row=12, column=0, padx=5, sticky='w')
         ttk.Entry(frame, textvariable=self.gamma[0], width=width_entry).grid(row=12, column=1, padx=5, sticky='w')
         ttk.Entry(frame, textvariable=self.gamma[1], width=width_entry).grid(row=12, column=2, padx=5, sticky='w')
-        ttk.Checkbutton(frame, text='Выводить список линий', variable=self.draw_line).grid(row=13, column=0)
-        ttk.Checkbutton(frame, text='Выводить длины волн', variable=self.draw_line_lambda).grid(row=13, column=1)
+        ttk.Label(frame, text="Выводить на эшеллеграмму:").grid(row=13, column=0, padx=5, sticky='w')
+        ttk.Checkbutton(frame, text='список линий', variable=self.draw_line).grid(row=13, column=1)
+        ttk.Checkbutton(frame, text='длины волн', variable=self.draw_line_lambda).grid(row=13, column=2)
 
-        self.start_btn = ttk.Button(frame, text="Найти оптим. решетки", command=self._search_optimal_grating)
-        self.start_btn.grid(row=14, column=0, padx=5)
+        ttk.Button(frame, text="Загр. список спектр. линий",
+                   command=self._load_spectral_line_list).grid(row=14, column=0, padx=5)
+
+        self.start_btn = ttk.Button(frame, text="Найти оптим. спектрометры", command=self._search_optimal_grating)
+        self.start_btn.grid(row=15, column=0, padx=5)
 
     def _progress_frame(self, parent):
         """Создает фрейм прогрессора"""
@@ -383,32 +469,102 @@ class EcheleGUI:
         self.progress = ttk.Progressbar(frame, orient="horizontal", length=300, mode="determinate")
         self.progress.pack(padx=20, pady=20)
 
-    def _search_optimal_grating(self):
-        self.ogfinder.lines_in_mm = [self.lines_in_mm[0].get(), self.lines_in_mm[1].get()]
-        self.ogfinder.gamma_rad = np.radians([self.gamma[0].get(), self.gamma[1].get()])
-        self.ogfinder.lambda_min = self.lambda_min.get()
-        self.ogfinder.lambda_max = self.lambda_max.get()
-        self.ogfinder.lamda_ctr = self.lambda_ctr.get()
-        self.ogfinder.matrix_size = self.limit.get() * 2
-        self.ogfinder.glass_type = self.glass_type.get()
-        self.ogfinder.slit_width = self.slit_width.get()
-        self.ogfinder.res_limit = self.res_limit.get()
-        self.ogfinder.max_focal = self.max_focal.get()
-        self.ogfinder.min_dist_k = self.min_dist.get()
-        self.ogfinder.max_focal_matrix_ratio = self.max_ratio.get()
-        self.ogfinder.max_lost_line = self.max_lost_line.get()
+    def _zemax_frame(self, parent):
+        """Создает фрейм модификации файла Земакс"""
+        frame = ttk.LabelFrame(parent, text="Изменить файл design.zmx:", padding="1")
+        frame.pack(fill='x', pady=1)
 
-        self.start_btn: ttk.Button
+        self.zemax_btn = ttk.Button(frame, text="Создать файл *.zmx", command=self._zmx_create)
+        self.zemax_btn.grid(row=0, column=0, padx=1)
+        if self.active_spectrometer is None:
+            self.zemax_btn.config(state=tk.DISABLED)
+
+    def _update_config(self):
+        self.config = ConfigOGF(
+            lines_in_mm=[self.lines_in_mm[0].get(), self.lines_in_mm[1].get()],
+            gamma_deg=[self.gamma[0].get(), self.gamma[1].get()],
+            lambda_min=self.lambda_min.get(),
+            lambda_max=self.lambda_max.get(),
+            lambda_ctr=self.lambda_ctr.get(),
+            matrix_size=self.limit.get() * 2,
+            glass_type=self.glass_type.get(),
+            slit_width=self.slit_width.get(),
+            res_limit=self.res_limit.get(),
+            max_focal=self.max_focal.get(),
+            min_dist_k=self.min_dist.get(),
+            max_focal_matrix_ratio=self.max_ratio.get(),
+            max_lost_line=self.max_lost_line.get()
+        )
+
+    def _search_optimal_grating(self):
+        self._update_config()
+        self.ogfinder.load_config(self.config)
+
         self.start_btn.config(state=tk.DISABLED)
-        thread = threading.Thread(target=self.run_search, daemon=False)
+        self.zemax_btn.config(state=tk.DISABLED)
+
+        # Создаём безопасный callback — он только ставит задачу в mainloop
+        def progress_callback(done: int, total: int):
+            # schedule update in main thread
+            try:
+                # используем self.window (или self.root) — у вас должно быть главное окно
+                self.window.after(0, lambda: self._update_progressbar(done, total))
+            except Exception:
+                # если self.window отсутствует — попытка fallback: ничего не делать
+                pass
+
+        thread = threading.Thread(target=self._thread_worker, args=(progress_callback,), daemon=True)
         thread.start()
         self.check_thread(thread)
 
         return
 
-    def run_search(self):
+    def _thread_worker(self, progress_callback):
+        """Рабочий поток — выполняет только расчёт, без GUI."""
+        try:
+            self.run_search(progress_callback)  # ← здесь не должно быть обращений к Tkinter!
+        except Exception as e:
+            # если ошибка, сообщаем в GUI через after()
+            self.window.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
+        else:
+            # если всё ок — вызываем обновление GUI
+            self.window.after(0, self._on_search_finished)
+
+    def _update_progressbar(self, done: int, total: int):
+        """Обновляет виджет progress в главном потоке."""
+        try:
+            # инициализация границ (если нужно)
+            self.progress["maximum"] = total
+            self.progress["value"] = done
+            # допустимо обновить интерфейс
+            self.progress.update_idletasks()
+        except Exception:
+            pass
+
+    def _on_search_finished(self):
+        """Этот метод выполняется уже в главном потоке."""
+        self.start_btn.config(state=tk.NORMAL)
+        messagebox.showinfo("Готово", "Поиск оптимальных спектрометров завершён.")
+
+    def _zmx_create(self):
+        editor = ZmxEchelleEditor(
+            filename="design.zmx",
+            spectrometer=self.active_spectrometer,
+            config=self.config,
+            center_config_idx=1,  # индекс конфигурации в файле, где должна быть центральная (по вашему описанию 7)
+            output="design-modified.zmx",
+            dry_run=False  # True — только расчёт/логи, не записывать файл
+        )
+
+        editor.process()
+
+        messagebox.showinfo("!!! ВНИМАНИЕ !!!", f"Отмасштабируйте схему "
+                                                f"на {self.active_spectrometer.focal_mm / 375} \n"
+                                                f"Затем выполните оптимизацию.")
+
+    def run_search(self, progress_callback):
         # здесь вызывается твоя функция
-        self.ogfinder.search_optimal(progress=self.progress)
+        self.ogfinder.search_optimal(progress_callback=progress_callback)
 
     def check_thread(self, thread):
         """Проверяем поток, чтобы обновлять интерфейс после завершения"""
@@ -428,11 +584,21 @@ class EcheleGUI:
                 self.optimal_grating_dataframe is None):
             return  # Выходим, если элемент еще не создан
 
+        # Очистка таблицы
         for item in self.grating_tree.get_children():
             self.grating_tree.delete(item)
 
-        for val in self.optimal_grating_dataframe.values:
-            self.grating_tree.insert("", END, values=val.tolist())
+        # Вставляем строки и задаём iid равным исходному индексу данных (int -> str)
+        # Это необходимо, чтобы корректно маппить выбор в таблице на спектрометры
+        for i, val in enumerate(self.optimal_grating_dataframe.values):
+            # Преобразуем значение в список (если это numpy array)
+            row_values = list(val.tolist()) if hasattr(val, "tolist") else list(val)
+            self.grating_tree.insert("", "end", iid=str(i), values=row_values)
+
+        # Сброс стрелок сортировки (по желанию)
+        for c in getattr(self, "_sort_orders", {}):
+            self.grating_tree.heading(c, text=c)
+            self._sort_orders[c] = False
 
     def _add_context_menu(self, widget):
         """Добавляет контекстное меню с возможностью копирования"""
@@ -447,11 +613,33 @@ class EcheleGUI:
 
         widget.bind("<Button-3>", show_menu)  # ПКМ для Windows и Linux
 
+    def _load_spectral_line_list(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Excel файлы", "*.xlsx"), ("Все файлы", "*.*")],
+            title="Загрузить файл списка спектральных линий"
+        )
+
+        if file_path:
+            try:
+                self.ogfinder.load_spectra_lines_list_from_excel(file_path)
+                self.last_spectral_line_file = file_path
+            except Exception as e:
+                logger.warning("Ошибка чтения файла со списком спектральных линий: %s", e, exc_info=True)
+
+
     def on_close(self):
-        """Обработчик закрытия окна"""
-        # self.logger.flush()  # Сохраняем данные перед выходом
-        # self.controller.disconnect()
-        self.window.destroy()
+        """Обработчик закрытия окна — сохраняем настройки и закрываем окно."""
+        try:
+            self._save_settings()
+        except Exception:
+            # не мешаем закрытию даже если сохранение упало
+            logger.exception("Ошибка при сохранении настроек при закрытии")
+        finally:
+            # уничтожаем окно
+            try:
+                self.window.destroy()
+            except Exception:
+                pass
 
     def run(self):
         """Запускает главный цикл приложения"""
