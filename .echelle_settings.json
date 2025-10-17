@@ -1,25 +1,27 @@
 {
   "lines_in_mm": [
-    80,
-    90
+    40,
+    250
   ],
   "gamma": [
-    45,
-    55
+    40,
+    85
   ],
-  "limit": 10.4,
+  "limit": 14.34,
   "glass_type": "CaF",
-  "slit_width": 25,
-  "res_limit": 0.0067,
-  "max_focal": 800,
-  "max_ratio": 10,
-  "min_dist": 0.08,
-  "max_lost_line": 0,
-  "lambda_min": 167,
-  "lambda_max": 780,
-  "lambda_ctr": 200,
+  "slit_width": 20,
+  "res_limit": 0.0045,
+  "max_focal": 400,
+  "max_ratio": 12,
+  "min_dist": 0.5,
+  "max_lost_line": 2,
+  "lambda_min": 242,
+  "lambda_max": 338,
+  "lambda_ctr": 267,
   "draw_line": true,
   "draw_line_lambda": true,
-  "window_geometry": "1624x817+130+130",
-  "last_spectral_line_file": "D:/Project_python/Echele/spectral_line_list_.xlsx"
+  "use_grating_list": true,
+  "window_geometry": "1624x817+181+97",
+  "last_spectral_line_file": "D:/Project_python/Echele/spectral_line_list_au.xlsx",
+  "last_grating_list_file": "grating_list.xlsx"
 }

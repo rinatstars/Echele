@@ -1,4 +1,5 @@
 """Модуль графического интерфейса"""
+import io
 import math
 import os
 import json
@@ -7,8 +8,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import threading
 import tkinter as tk
-from tkinter import *
 from tkinter import ttk, Tk, BooleanVar, StringVar, IntVar, Menu, DoubleVar, messagebox, filedialog
+from tkintertable import TableCanvas, TableModel
 from lib.echelle.optimalGratingFinder import OptimalGratingFinder
 from lib.echelle.echellegrammaDrawer import EchellegrammaDrawer
 from lib.echelle.zmx_echelle_editor import ZmxEchelleEditor
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 SETTINGS_FILENAME = os.path.join(".echelle_settings.json")
+
 
 class EchelleGUI:
     """Класс графического интерфейса для управления устройством"""
@@ -45,6 +47,7 @@ class EchelleGUI:
     def _init_variables(self):
         """Инициализация переменных интерфейса"""
         self.last_spectral_line_file = "spectral_line_list.xlsx"
+        self.last_grating_list_file = "grating_list.xlsx"
         self.lines_in_mm = [IntVar(value=80), IntVar(value=120)]
         self.gamma = [IntVar(value=40), IntVar(value=80)]
         self.limit = DoubleVar(value=10.4)  # полуширина матрицы (мм)
@@ -60,6 +63,8 @@ class EchelleGUI:
         self.lambda_min = IntVar(value=167)  # нм
         self.lambda_max = IntVar(value=780)  # нм
         self.lambda_ctr = IntVar(value=200)  # нм
+
+        self.use_grating_list = BooleanVar(value=False)  # использовать список дифракционных решеток
 
         self.draw_line = BooleanVar(value=True)  # выводить список спектральных линий на эшелеграмме
         self.draw_line_lambda = BooleanVar(value=True)  # подписывать длины волн
@@ -127,6 +132,8 @@ class EchelleGUI:
                 self.draw_line.set(bool(data["draw_line"]))
             if "draw_line_lambda" in data:
                 self.draw_line_lambda.set(bool(data["draw_line_lambda"]))
+            if "use_grating_list" in data:
+                self.use_grating_list.set(bool(data["use_grating_list"]))
 
             # Восстановление геометрии окна (опционально)
             if "window_geometry" in data:
@@ -145,6 +152,17 @@ class EchelleGUI:
                 self.ogfinder.load_spectra_lines_list_from_excel(self.last_spectral_line_file)
             except Exception as e:
                 logger.warning("Ошибка чтения файла со списком спектральных линий: %s", e, exc_info=True)
+
+            # Загрузка файла со списком решеток используемыми последний раз
+            if "last_grating_list_file" in data:
+                try:
+                    self.last_grating_list_file = data["last_grating_list_file"]
+                except Exception:
+                    pass
+            try:
+                self.ogfinder.load_grating_list_from_excel(self.last_grating_list_file)
+            except Exception as e:
+                logger.warning("Ошибка чтения файла со списком дифракционных решеток: %s", e, exc_info=True)
 
             logger.info("Loaded settings from %s", path)
         except Exception as exc:
@@ -171,8 +189,10 @@ class EchelleGUI:
                 "lambda_ctr": int(self.lambda_ctr.get()),
                 "draw_line": bool(self.draw_line.get()),
                 "draw_line_lambda": bool(self.draw_line_lambda.get()),
+                "use_grating_list": bool(self.use_grating_list.get()),
                 "window_geometry": self.window.geometry(),
-                "last_spectral_line_file": self.last_spectral_line_file
+                "last_spectral_line_file": self.last_spectral_line_file,
+                "last_grating_list_file": self.last_grating_list_file
             }
 
             # безопасная запись (записываем сначала в tmp, затем переименуем)
@@ -205,134 +225,71 @@ class EchelleGUI:
         center_frame = ttk.Frame(main_container)
         center_frame.grid(row=0, column=1, sticky='nsew')
 
-        # Правая колонка (вывод команд)
-        # right_frame = ttk.Frame(main_container)
-        # right_frame.grid(row=0, column=2, sticky='nse', padx=(10, 0))
-
         # Элементы управления
         self._create_setting_frame(left_frame)
         self._progress_frame(left_frame)
         self._zemax_frame(left_frame)
 
         # Таблица с оптимальными решетками
-        self.create_table(center_frame)
+        self._create_table(center_frame)
 
-    def create_table(self, parent):
-        """Создает фрейм таблицы с результатами"""
-        # Таблица добавленных элементов со свойствами
-        tree_frame = ttk.Frame(parent)
-        tree_frame.pack(fill=BOTH, expand=True, padx=5, pady=5)
+    def _create_table(self, parent):
+        """Создает фрейм таблицы с результатами (использует tkintertable)"""
+        self.table_frame = ttk.Frame(parent)
+        self.table_frame.pack(fill='both', expand=True, padx=5, pady=5)
 
-        # Вертикальный скроллбар
-        y_scroll = ttk.Scrollbar(tree_frame, orient=VERTICAL)
-        y_scroll.pack(side=RIGHT, fill=Y)
-        x_scroll = ttk.Scrollbar(tree_frame, orient=HORIZONTAL)
-        x_scroll.pack(side=BOTTOM, fill=X)
-
-        columns = ("N", "gamma_deg", "kmin", "kmax", "f_mm", "prism_deg", "gap_mm",
-                   "ratio_f_det", "spectral_full_nm", "spectral_visible_nm", "spectral_lost_nm",
-                   "num_lost_lines", "loss_pct")
-
-        self.grating_tree = ttk.Treeview(
-            tree_frame,
-            columns=columns,
-            show="headings",
-            yscrollcommand=y_scroll.set,
-            xscrollcommand=x_scroll.set
+        # Создаем модель таблицы (пока пустую)
+        self.table_model = TableModel()
+        self.table = TableCanvas(
+            self.table_frame,
+            model=self.table_model,
+            editable=False,  # можно включить редактирование при необходимости
+            showtoolbar=True,  # панель с кнопками (сортировка, экспорт и т.п.)
+            showstatusbar=True,  # строка состояния
         )
-        self.grating_tree.pack(fill=BOTH, expand=True)
+        self.table.fontsize = 8
+        self.table.show()
+        self.table.autoResizeColumns()
 
-        # Настройка скроллбаров
-        y_scroll.config(command=self.grating_tree.yview)
-        x_scroll.config(command=self.grating_tree.xview)
+        self.table.bind("<ButtonRelease-1>", self._on_table_select)
 
-        # словарь для хранения состояния сортировки по каждому столбцу
-        self._sort_orders = {col: False for col in columns}
+    def _disable_cell_editing(self, event):
+        # Просто прерываем встроенную обработку редактирования
+        return "break"
 
-        for column in columns:
-            self.grating_tree.heading(
-                column,
-                text=column,
-                command=lambda c=column: self._sort_treeview_column(c, not self._sort_orders[c])
-            )
-            self.grating_tree.column(column, width=80, anchor=CENTER)
-
-        self.grating_tree.bind("<<TreeviewSelect>>", self._on_element_select)
-
-    def _sort_treeview_column(self, col, reverse: bool):
-        """Сортировка по столбцу Treeview"""
+    def _on_table_select(self, event):
         try:
-            # Получаем все значения
-            data = [(self.grating_tree.set(k, col), k) for k in self.grating_tree.get_children('')]
+            row = self.table.get_row_clicked(event)
+            if row is None:
+                return
 
-            # Попробуем сортировать как числа, если не получится — как строки
-            try:
-                data.sort(key=lambda t: float(t[0]), reverse=reverse)
-            except ValueError:
-                data.sort(key=lambda t: t[0], reverse=reverse)
+            # получаем словарь значений выбранной строки
+            record = self.table.model.getRecordAtRow(row)
+            # извлекаем оригинальный индекс
+            data_index = int(record.get("orig_index", row))
 
-            # Переставляем элементы
-            for idx, (_, k) in enumerate(data):
-                self.grating_tree.move(k, '', idx)
-
-            # Меняем направление сортировки для следующего клика
-            self._sort_orders[col] = reverse
-
-            # Меняем стрелку в заголовке
-            for c in self.grating_tree["columns"]:
-                self.grating_tree.heading(c, text=c)  # сбрасываем
-            arrow = " ▲" if reverse else " ▼"
-            self.grating_tree.heading(col, text=f"{col}{arrow}")
-
-        except Exception as e:
-            logger.debug(f"⚠️ Ошибка сортировки столбца {col}: {e}", exc_info=True)
-
-    def _on_element_select(self, event):
-        selected = self.grating_tree.selection()
-        if not selected:
-            return
-
-        # selected[0] — это iid строки (строка, потому используем str->int)
-        iid = selected[0]
-        try:
-            data_index = int(iid)
-        except Exception:
-            # если iid нестандартный (не число) — попробуем взять по позиции
-            try:
-                data_index = self.grating_tree.index(iid)
-            except Exception:
-                data_index = None
-
-        if data_index is None:
-            logger.warning("Не удалось определить индекс данных для выбранного элемента: %s", iid)
-            return
-
-        try:
-            # Извлечение данных о решётке (значения в строке)
-            grating_values = self.grating_tree.item(iid, "values")
-            (
-                lines_in_mm_str,
-                gamma_deg_str,
-                k_min_str,
-                k_max_str,
-                focal_str,
-                prism_wedge_angle_deg_str,
-                gap_mm,
-                *_,
-            ) = grating_values
-
-            # Берём спектрометр по исходному индексу данных
             spectrometer = self.ogfinder.spectrometers[data_index]
-
             self.active_spectrometer = spectrometer
             if self.active_spectrometer is not None:
                 self.zemax_btn.config(state=tk.NORMAL)
+                self.draw_echellegramma_btn.config(state=tk.NORMAL)
+        except Exception as e:
+            logger.warning(f"Ошибка выбора строки: {e}", exc_info=True)
 
+    def _click_button_echellegramma(self):
+        try:
+
+            if self.active_spectrometer is not None:
+                self._draw_echellegramma(self.active_spectrometer)
+        except Exception as e:
+            logger.warning(f"Ошибка построения эшеллеграммы: {e}", exc_info=True)
+
+    def _draw_echellegramma(self, spectrometer):
+        try:
             # Преобразование к числовым типам и остальная логика остаются без изменений
             lines_in_mm = spectrometer.result.N
             gamma_deg = spectrometer.result.gamma_deg
             grating_cross_tilt_rad = spectrometer.grating.gr_cross_tilt_rad
-            k_min = int(spectrometer.result.kmin)
             k_max = int(spectrometer.result.kmax)
             focal = float(spectrometer.result.f_mm)
             prism_wedge_angle_deg = float(spectrometer.result.prism_deg)
@@ -340,9 +297,6 @@ class EchelleGUI:
             gap_mm = float(spectrometer.result.gap_mm)
             df_avg = spectrometer.df_avg
             df_prism_min = spectrometer.df_prism_min
-
-            dx = 0
-            dy = gap_mm
             matrix_size = float(self.limit.get()) * 2.0
 
             # Создание экземпляра расчётчика эшеллеграммы
@@ -367,7 +321,7 @@ class EchelleGUI:
             for order in self.echellegramma_orders:
                 ax.plot(
                     [order.x_min_clipped, order.x_max_clipped],
-                    [order.y_min_clipped, order.y_max_clipped],
+                    [order.y_min_clipped + gap_mm / 2, order.y_max_clipped + gap_mm / 2],
                     color="blue",
                     alpha=0.9,
                     linewidth=1.2,
@@ -392,16 +346,18 @@ class EchelleGUI:
             )
 
             if self.draw_line.get():
-                for line in self.ogfinder.spectra_lines_list:
-                    x, y = wavelength_to_detector_coords(
-                        line[1], k_max, focal, lines_in_mm,
-                        math.radians(gamma_deg), grating_cross_tilt_rad,
-                        0, math.radians(prism_wedge_angle_deg), df_avg,
-                        df_prism_min, glass_type,
-                        phi2
-                    )
-                    ax.scatter(x, y, color="red", s=5)
-                    ax.text(x, y + .05, f"{line[0]}, {line[1] if self.draw_line_lambda.get() else ''}", fontsize=6)
+                if self.ogfinder.spectra_lines_list is not None:
+                    for line in self.ogfinder.spectra_lines_list:
+                        x, y = wavelength_to_detector_coords(
+                            line[1], k_max, focal, lines_in_mm,
+                            math.radians(gamma_deg), grating_cross_tilt_rad,
+                            0, math.radians(prism_wedge_angle_deg), df_avg,
+                            df_prism_min, glass_type,
+                            phi2
+                        )
+                        y = y + gap_mm / 2
+                        ax.scatter(x, y, color="red", s=5)
+                        ax.text(x, y + .05, f"{line[0]}, {line[1] if self.draw_line_lambda.get() else ''}", fontsize=6)
 
             half_limit = float(self.limit.get())
             ax.set_xlim(-half_limit, half_limit)
@@ -451,15 +407,26 @@ class EchelleGUI:
         ttk.Label(frame, text="Угол блеска:").grid(row=12, column=0, padx=5, sticky='w')
         ttk.Entry(frame, textvariable=self.gamma[0], width=width_entry).grid(row=12, column=1, padx=5, sticky='w')
         ttk.Entry(frame, textvariable=self.gamma[1], width=width_entry).grid(row=12, column=2, padx=5, sticky='w')
-        ttk.Label(frame, text="Выводить на эшеллеграмму:").grid(row=13, column=0, padx=5, sticky='w')
-        ttk.Checkbutton(frame, text='список линий', variable=self.draw_line).grid(row=13, column=1)
-        ttk.Checkbutton(frame, text='длины волн', variable=self.draw_line_lambda).grid(row=13, column=2)
+        self.use_grating_list_chbtn = ttk.Checkbutton(frame, text='Использовать список решеток',
+                                                      variable=self.use_grating_list)
+        self.use_grating_list_chbtn.grid(row=13, column=0)
+        if self.ogfinder.grating_list is None:
+            self.use_grating_list_chbtn.config(state=tk.DISABLED)
+        ttk.Label(frame, text="Выводить на эшеллеграмму:").grid(row=14, column=0, padx=5, sticky='w')
+        ttk.Checkbutton(frame, text='список линий', variable=self.draw_line).grid(row=14, column=1)
+        ttk.Checkbutton(frame, text='длины волн', variable=self.draw_line_lambda).grid(row=14, column=2)
 
         ttk.Button(frame, text="Загр. список спектр. линий",
-                   command=self._load_spectral_line_list).grid(row=14, column=0, padx=5)
-
+                   command=self._load_spectral_line_list).grid(row=15, column=0, padx=5)
+        ttk.Button(frame, text="Загр. список дифр. решеток",
+                   command=self._load_grating_list).grid(row=15, column=1, columnspan=2, padx=5, pady=5, sticky="ew")
         self.start_btn = ttk.Button(frame, text="Найти оптим. спектрометры", command=self._search_optimal_grating)
-        self.start_btn.grid(row=15, column=0, padx=5)
+        self.start_btn.grid(row=16, column=0, padx=5)
+        self.draw_echellegramma_btn = ttk.Button(frame, text="Построить эшеллеграмму",
+                                                 command=self._click_button_echellegramma)
+        self.draw_echellegramma_btn.grid(row=17, column=0, padx=5)
+        if self.active_spectrometer is None:
+            self.draw_echellegramma_btn.config(state=tk.DISABLED)
 
     def _progress_frame(self, parent):
         """Создает фрейм прогрессора"""
@@ -497,11 +464,15 @@ class EchelleGUI:
         )
 
     def _search_optimal_grating(self):
+        # перед запуском очистим старые окна matplotlib
+        plt.close('all')
+
         self._update_config()
         self.ogfinder.load_config(self.config)
 
         self.start_btn.config(state=tk.DISABLED)
         self.zemax_btn.config(state=tk.DISABLED)
+        self.draw_echellegramma_btn.config(state=tk.DISABLED)
 
         # Создаём безопасный callback — он только ставит задачу в mainloop
         def progress_callback(done: int, total: int):
@@ -523,8 +494,7 @@ class EchelleGUI:
         """Рабочий поток — выполняет только расчёт, без GUI."""
         try:
             self.run_search(progress_callback)  # ← здесь не должно быть обращений к Tkinter!
-        except Exception as e:
-            # если ошибка, сообщаем в GUI через after()
+        except Exception as e:  # если ошибка, сообщаем в GUI через after()
             self.window.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
         else:
             # если всё ок — вызываем обновление GUI
@@ -564,7 +534,7 @@ class EchelleGUI:
 
     def run_search(self, progress_callback):
         # здесь вызывается твоя функция
-        self.ogfinder.search_optimal(progress_callback=progress_callback)
+        self.ogfinder.search_optimal(progress_callback=progress_callback, use_grating_list=self.use_grating_list.get())
 
     def check_thread(self, thread):
         """Проверяем поток, чтобы обновлять интерфейс после завершения"""
@@ -576,42 +546,103 @@ class EchelleGUI:
                 df = pd.DataFrame([r.result.to_dict(drop_lists=True) for r in self.ogfinder.spectrometers])
                 self.optimal_grating_dataframe = df
 
-            self.update_grating_tree()
+            self._update_grating_tree()
 
-    def update_grating_tree(self):
-        """Обновление таблицы Treeview с текущими добавленными элементами"""
-        if (not hasattr(self, 'grating_tree') or self.grating_tree is None or
-                self.optimal_grating_dataframe is None):
-            return  # Выходим, если элемент еще не создан
+    def _update_grating_tree(self):
+        """Обновляет таблицу tkintertable из DataFrame"""
+        if self.optimal_grating_dataframe is None:
+            return
 
-        # Очистка таблицы
-        for item in self.grating_tree.get_children():
-            self.grating_tree.delete(item)
+        try:
+            # создаём копию DataFrame с добавлением исходного индекса
+            df = self.optimal_grating_dataframe.copy()
+            df.insert(0, "orig_index", range(len(df)))  # добавляем колонку с оригинальными индексами
 
-        # Вставляем строки и задаём iid равным исходному индексу данных (int -> str)
-        # Это необходимо, чтобы корректно маппить выбор в таблице на спектрометры
-        for i, val in enumerate(self.optimal_grating_dataframe.values):
-            # Преобразуем значение в список (если это numpy array)
-            row_values = list(val.tolist()) if hasattr(val, "tolist") else list(val)
-            self.grating_tree.insert("", "end", iid=str(i), values=row_values)
+            # Ограничим число знаков после запятой для красоты
+            df = df.round(4)
 
-        # Сброс стрелок сортировки (по желанию)
-        for c in getattr(self, "_sort_orders", {}):
-            self.grating_tree.heading(c, text=c)
-            self._sort_orders[c] = False
+            # Обновляем модель таблицы напрямую из DataFrame
+            self.table_model = TableModel()
+            self.table_model.importDict(df.to_dict(orient="index"))
 
-    def _add_context_menu(self, widget):
-        """Добавляет контекстное меню с возможностью копирования"""
-        menu = Menu(widget, tearoff=0)
-        menu.add_command(label="Копировать", command=lambda: widget.event_generate("<<Copy>>"))
+            # удаляем колонку из видимых
+            if "orig_index" in self.table_model.columnNames:
+                self.table_model.columnNames.remove("orig_index")
 
-        def show_menu(event):
-            try:
-                menu.tk_popup(event.x_root, event.y_root)
-            finally:
-                menu.grab_release()
+            rename_map = {
+                "N": "Лин/мм",
+                "gamma_deg": "Блеск(°)",
+                "kmin": "kmin",
+                "kmax": "kmax",
+                "f_mm": "Фокус(мм)",
+                "prism_deg": "Угол пр.",
+                "ratio_f_det": "Отн. f/Dm",
+                "spectral_full_nm": "Весь(нм)",
+                "spectral_visible_nm": "Видим.(нм)",
+                "spectral_lost_nm": "Потеря(нм)",
+                "num_lost_lines": "Потеря(лин)",
+                "loss_pct": "Потеря(%)",
+                "gap_mm": "Зазор(мм)",
+                # ... добавь остальные
+            }
 
-        widget.bind("<Button-3>", show_menu)  # ПКМ для Windows и Linux
+            # Присваиваем новой модели существующую таблицу
+            self.table.updateModel(self.table_model)
+            for i, colName in enumerate(self.table.model.columnNames):
+                if colName in rename_map:
+                    self.table.model.relabel_Column(i, rename_map[colName])
+            self.table.redrawTable()
+            self._auto_resize_columns()
+
+
+        except Exception as e:
+            logger.exception(f"Ошибка при обновлении таблицы tkintertable: {e}")
+
+    def _auto_resize_columns(self):
+        """Автоматически подбирает ширину колонок под содержимое и заголовки"""
+        from tkinter import font
+
+        try:
+            model = self.table.model
+            data = model.data
+
+            # Получаем список колонок
+            if hasattr(model, "columnlabels"):
+                columns = model.columnlabels
+            elif hasattr(model, "columnNames"):
+                columns = model.columnNames
+            elif hasattr(model, "columns"):
+                columns = list(model.columns.keys())
+            elif len(data) > 0:
+                # берем по первой строке, если структура есть
+                columns = list(next(iter(data.values())).keys())
+            else:
+                return
+
+            # Получаем ширину символа текущего шрифта
+            f = font.nametofont("TkDefaultFont")
+            char_width = f.measure("%")
+
+            column_widths = {}
+
+            for col in columns:
+                # вычисляем макс. длину в колонке + заголовок
+                lengths = [len(str(columns[col]))]
+                for row in data.values():
+                    val = row.get(col, "")
+                    lengths.append(len(str(val)))
+                max_len = max(lengths)
+
+                # минимальная ширина — 2 символа
+                width_px = max(2 * char_width, max_len * char_width)
+                column_widths[col] = width_px
+
+            # применяем новые ширины
+            model.columnwidths.update(column_widths)
+            self.table.redrawTable()
+
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка авторасчета ширины: {e}")
 
     def _load_spectral_line_list(self):
         file_path = filedialog.askopenfilename(
@@ -626,6 +657,19 @@ class EchelleGUI:
             except Exception as e:
                 logger.warning("Ошибка чтения файла со списком спектральных линий: %s", e, exc_info=True)
 
+
+    def _load_grating_list(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Excel файлы", "*.xlsx"), ("Все файлы", "*.*")],
+            title="Загрузить файл списка дифракционных решеток"
+        )
+
+        if file_path:
+            try:
+                self.ogfinder.load_grating_list_from_excel(file_path)
+                self.last_grating_list_file = file_path
+            except Exception as e:
+                logger.warning("Ошибка чтения файла со списком спектральных линий: %s", e, exc_info=True)
 
     def on_close(self):
         """Обработчик закрытия окна — сохраняем настройки и закрываем окно."""

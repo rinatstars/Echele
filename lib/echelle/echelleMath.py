@@ -49,6 +49,13 @@ def refractive_index(lambda_nm: float, glass: str = "CaF") -> float | None:
                 + 0.4710914 / (1 - (0.1003909 / lambda_nm) ** 2)
                 + 3.8484723 / (1 - (34.649040 / lambda_nm) ** 2)
         )
+    elif glass == "KU-1":  # KU-1
+        n2 = (
+                1
+                + (0.6961663 * lam2) / (lam2 - 0.0684043 ** 2)
+                + (0.4079426 * lam2) / (lam2 - 0.1162414 ** 2)
+                + (0.8974794 * lam2) / (lam2 - 9.896161 ** 2)
+        )
     else:
         n2 = None
     return np.sqrt(n2)

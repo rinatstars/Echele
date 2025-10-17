@@ -33,7 +33,6 @@ LAMBDA_CTR = 200  # нм
 # глобальная переменная для больших неизменяемых структур (инициализируется через initializer)
 _SPECTRA_LINES: Optional[np.ndarray] = None
 
-
 def init_worker(spectra_lines: Optional[Sequence] = None) -> None:
     """
     Initializer for worker processes: store large read-only structures in module-global variable.
@@ -130,9 +129,6 @@ def compute_spectral_losses(
     Returns None if constraint (max_lost_line) exceeded or on error.
     """
     global _SPECTRA_LINES
-    if _SPECTRA_LINES is None:
-        # No input spectral lines -> nothing to compute
-        return None
 
     total_full = total_vis = total_lost = 0.0
     total_lost_lines = 0
@@ -159,22 +155,19 @@ def compute_spectral_losses(
 
         # If there are spectral lines, check visibility/lost
         # _SPECTRA_LINES assumed shape (N, M) where second column index 1 contains wavelength in nm
-        try:
-            for row in _SPECTRA_LINES:
-                # row[1] is wavelength in nm (as in your code)
-                wl_nm = row[1]
-                if (lam_l_left_nm[0] < wl_nm < lam_l_left_nm[1]) or (lam_l_right_nm[0] < wl_nm < lam_l_right_nm[1]):
-                    total_lost_lines += 1
-                    lost_line_list.append(tuple(row))
-                elif lam_l_right_nm[0] > wl_nm > lam_l_left_nm[1]:
-                    vis_line_list.append(tuple(row))
-        except Exception:
-            # If spectra lines format unexpected -> skip marking lines but still return totals
-            logger.debug("spectra lines processing failed in worker", exc_info=True)
-
-        # Early exit if too many lost lines
-        if max_lost_line is not None and max_lost_line != 0 and total_lost_lines > max_lost_line:
-            return None
+        if _SPECTRA_LINES is not None:
+            try:
+                for row in _SPECTRA_LINES:
+                    # row[1] is wavelength in nm (as in your code)
+                    wl_nm = row[1]
+                    if (lam_l_left_nm[0] < wl_nm < lam_l_left_nm[1]) or (lam_l_right_nm[0] < wl_nm < lam_l_right_nm[1]):
+                        total_lost_lines += 1
+                        lost_line_list.append(tuple(row))
+                    elif lam_l_right_nm[0] > wl_nm > lam_l_left_nm[1]:
+                        vis_line_list.append(tuple(row))
+            except Exception:
+                # If spectra lines format unexpected -> skip marking lines but still return totals
+                logger.debug("spectra lines processing failed in worker", exc_info=True)
 
     return total_full, total_vis, total_lost, total_lost_lines, vis_line_list, lost_line_list, orders_in_lambda
 
@@ -359,18 +352,33 @@ def evaluate_grating(task: Tuple[float, float, Dict[str, Any]]) -> Optional[Spec
         return None
 
 
+def load_df_from_excel(filename: str):
+    """
+    Загрузка датафрейма из Excel
+    :param filename: путь к файлу
+    :return: dataframe
+    """
+    try:
+        if not os.path.exists(filename):
+            logger.info("Файл не найден: %s", filename)
+            return
+        return pd.read_excel(filename)
+    except Exception as e:
+        logger.warning("Ошибка чтения файла: %s", e, exc_info=True)
+
+
 class OptimalGratingFinder:
     def __init__(self, config: ConfigOGF):
         """
         :param config: конфигурационный датасет для OptimalGratingFinder
         """
-        self.spectra_lines_list = None
         self.load_config(config)
         self.vis_los_lines = None
         self.grating_cross_tilt_rad = math.radians(config.grating_cross_tilt_deg)
 
         # runtime populated
         self.spectra_lines_list: Optional[np.ndarray] = None
+        self.grating_list: Optional[np.ndarray] = None
         self.spectrometers: List[Spectrometer] = []
         self.optimal_grating_dataframe: Optional[pd.DataFrame] = None
 
@@ -378,13 +386,32 @@ class OptimalGratingFinder:
         """
         Load spectral lines table from Excel. Expected format: array-like with wavelength in column 1 (nm).
         """
-
         try:
-            if not os.path.exists(filename):
-                logger.info("Файл со списком спектральных линий не найден: %s", filename)
-                return
-            df = pd.read_excel(filename)
-            self.spectra_lines_list = df.values
+            df = load_df_from_excel(filename)
+            if "element" not in df and "lambda" not in df:
+                logger.info("Формат файла со списом линий не верный: %s", filename)
+                raise Exception(
+                    "Формат файла со списом линий не верный")
+            else:
+                self.spectra_lines_list = df.values
+        except Exception as e:
+            logger.warning("Ошибка чтения файла со списком спектральных линий: %s", e, exc_info=True)
+
+    def load_grating_list_from_excel(self, filename: str) -> None:
+        """
+        Загрузка списка дифракционных решеток из Excel
+        :param filename: путь к файлу со списком решеток
+        :return:
+        """
+        try:
+            df = load_df_from_excel(filename)
+            if ("N" not in df and "size_x" not in df and
+                    "size_y" not in df and "gamma" not in df):
+                logger.info("Формат файла со списом дифракционных решеток не верный: %s", filename)
+                raise Exception(
+                    "Формат файла со списом дифракционных решеток не верный")
+            else:
+                self.grating_list = df.values
         except Exception as e:
             logger.warning("Ошибка чтения файла со списком спектральных линий: %s", e, exc_info=True)
 
@@ -429,11 +456,13 @@ class OptimalGratingFinder:
     def search_optimal(
             self,
             save_excel: bool = False,
+            use_grating_list: bool = False,
             progress_callback: Optional[callable] = None,
             use_spawn: bool = True,
             chunksize: int = 1,
     ) -> Optional[Tuple[pd.DataFrame, Optional[Spectrometer], Optional[Spectrometer]]]:
         """Перебираем line_in_mm (1) и gamma (0.5°) в параллели.
+        :param use_grating_list: bool=False использовать список дифракционных решеток
         :param save_excel: bool=False сохранить файл .xlsx
         :param progress_callback: callback | None для отображения прогресса
         :param use_spawn: use spawn context (Windows-safe). If False uses default context.
@@ -447,9 +476,17 @@ class OptimalGratingFinder:
         # assemble tasks: send gamma in radians to workers
         tasks: List[Tuple[float, float, Dict[str, Any]]] = []
         cfg = self._build_worker_config()
-        for line_n in line_in_mm_vals:
-            for gamma_rad in gamma_vals:
-                tasks.append((float(line_n), gamma_rad, cfg))
+        if not use_grating_list:
+            for line_n in line_in_mm_vals:
+                for gamma_rad in gamma_vals:
+                    tasks.append((float(line_n), gamma_rad, cfg))
+        else:
+
+            if self.grating_list is not None:
+                grating_list = np.asarray(self.grating_list)
+                for row in grating_list:
+                    tasks.append((row[0], math.radians(row[3]), cfg))
+
 
         total = len(tasks)
         if total == 0:
@@ -510,11 +547,10 @@ class OptimalGratingFinder:
             self.optimal_grating_dataframe = df
             valid = [valid[i] for i in df.index]
             self.spectrometers = valid
-            self.vis_los_lines = valid[1], valid[2]
             if save_excel:
                 self.save_optimal_grating_dataframe_to_excel(f"opt_grat_det({self.matrix_size / 2 * 2})_split"
                                                              f"({self.slit_width})_res({self.res_limit * 1000}).xlsx")
-            return df, valid[1], valid[2]
+            return df
 
         return None
 

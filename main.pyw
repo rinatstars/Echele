@@ -20,6 +20,7 @@ LAMBDA_MIN = 167  # нм
 LAMBDA_MAX = 780  # нм
 LAMBDA_CTR = 200  # нм
 
+logging.basicConfig(level=logging.DEBUG)
 
 def main():
     configOGF = ConfigOGF([70, 120], [40, 80], LAMBDA_MIN, LAMBDA_MAX, LAMBDA_CTR,
