@@ -474,26 +474,26 @@ class EchelleGUI:
         self.zemax_btn.config(state=tk.DISABLED)
         self.draw_echellegramma_btn.config(state=tk.DISABLED)
 
-        # Создаём безопасный callback — он только ставит задачу в mainloop
-        def progress_callback(done: int, total: int):
-            # schedule update in main thread
-            try:
-                # используем self.window (или self.root) — у вас должно быть главное окно
-                self.window.after(0, lambda: self._update_progressbar(done, total))
-            except Exception:
-                # если self.window отсутствует — попытка fallback: ничего не делать
-                pass
+        # # Создаём безопасный callback — он только ставит задачу в mainloop
+        # def progress_callback(done: int, total: int):
+        #     # schedule update in main thread
+        #     try:
+        #         # используем self.window (или self.root) — у вас должно быть главное окно
+        #         self.window.after(0, lambda: self._update_progressbar(done, total))
+        #     except Exception:
+        #         # если self.window отсутствует — попытка fallback: ничего не делать
+        #         pass
 
-        thread = threading.Thread(target=self._thread_worker, args=(progress_callback,), daemon=True)
+        thread = threading.Thread(target=self._thread_worker, daemon=True)
         thread.start()
         self.check_thread(thread)
 
         return
 
-    def _thread_worker(self, progress_callback):
+    def _thread_worker(self):
         """Рабочий поток — выполняет только расчёт, без GUI."""
         try:
-            self.run_search(progress_callback)  # ← здесь не должно быть обращений к Tkinter!
+            self.run_search()  # ← здесь не должно быть обращений к Tkinter!
         except Exception as e:  # если ошибка, сообщаем в GUI через after()
             self.window.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
         else:
@@ -532,13 +532,17 @@ class EchelleGUI:
                                                 f"на {self.active_spectrometer.focal_mm / 375} \n"
                                                 f"Затем выполните оптимизацию.")
 
-    def run_search(self, progress_callback):
-        # здесь вызывается твоя функция
-        self.ogfinder.search_optimal(progress_callback=progress_callback, use_grating_list=self.use_grating_list.get())
+    def run_search(self):
+        self.ogfinder.search_optimal(use_grating_list=self.use_grating_list.get())
+
 
     def check_thread(self, thread):
         """Проверяем поток, чтобы обновлять интерфейс после завершения"""
         if thread.is_alive():
+            if hasattr(self.ogfinder, "done") and hasattr(self.ogfinder, "total"):
+                done = self.ogfinder.done.value
+                total = self.ogfinder.total
+                self._update_progressbar(done, total)
             self.window.after(200, lambda: self.check_thread(thread))
         else:
             self.start_btn.config(state=tk.NORMAL)

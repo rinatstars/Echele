@@ -1,12 +1,12 @@
 from __future__ import annotations
-
 import math
 import os
 import logging
+import ctypes
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 import numpy as np
-from multiprocessing import Pool, cpu_count, get_context
+from multiprocessing import cpu_count, get_context, Value
 from lib.echelle.dataClasses import (
     Grating, Prism, Spectrometer,
     EvaluationResult, ConfigOGF
@@ -457,16 +457,10 @@ class OptimalGratingFinder:
             self,
             save_excel: bool = False,
             use_grating_list: bool = False,
-            progress_callback: Optional[callable] = None,
-            use_spawn: bool = True,
-            chunksize: int = 1,
     ) -> Optional[Tuple[pd.DataFrame, Optional[Spectrometer], Optional[Spectrometer]]]:
         """Перебираем line_in_mm (1) и gamma (0.5°) в параллели.
         :param use_grating_list: bool=False использовать список дифракционных решеток
         :param save_excel: bool=False сохранить файл .xlsx
-        :param progress_callback: callback | None для отображения прогресса
-        :param use_spawn: use spawn context (Windows-safe). If False uses default context.
-        :param chunksize: chunksize for imap_unordered (1 => most responsive)
         :return: DataFrame список оптимальных решоток или None если ничего не найдено
         """
 
@@ -492,52 +486,48 @@ class OptimalGratingFinder:
         if total == 0:
             return None
 
-        done = 0
-
-        # Если progress_callback is None, передать no-op
-        if progress_callback is None:
-            def _noop_done(done, total): pass
-            progress_callback = _noop_done
-
-        # Убедиться что progress_callback is callable
-        if not callable(progress_callback):
-            raise TypeError("progress_callback must be callable or None")
+        # 🔹 общий счётчик завершённых заданий
+        done = Value(ctypes.c_int, 0)
+        self.done = done
+        self.total = total
+        step = total/10
+        batch = 0
 
         # prepare worker initializer args
         init_args = (self.spectra_lines_list,) if self.spectra_lines_list is not None else (None,)
 
         results: List[Spectrometer] = []
 
-        # choose context
-        ctx = get_context("spawn") if use_spawn else get_context()
-
         # create pool with initializer (so large arrays get loaded once per worker)
         workers = max(1, min(total, cpu_count()))
+        chunksize = max(1, total // (workers * 8))
+        from concurrent.futures import ProcessPoolExecutor, as_completed
         if workers > 1:
-            with ctx.Pool(processes=workers, initializer=init_worker, initargs=init_args) as pool:
-                # use imap_unordered to get results as they become available
-                for res in pool.imap_unordered(evaluate_grating, tasks, chunksize=chunksize):
-                    # res can be None or Spectrometer
+            init_worker(*init_args) if isinstance(init_args, tuple) else init_worker(init_args)
+            with ProcessPoolExecutor(max_workers=workers, initializer=init_worker, initargs=init_args) as executor:
+                # executor.map возвращает итератор, не создавая тысячи Future сразу
+                for res in executor.map(evaluate_grating, tasks, chunksize=chunksize):
+                    # res может быть None или Spectrometer
                     if res is not None:
                         results.append(res)
-                    done += 1
-                    # update progressbar safely (main thread)
-                    try:
-                        progress_callback(done, total)
-                    except Exception:
-                        # never allow progress updates to break the loop
-                        pass
+
+                    batch += 1
+                    if batch % step == 0 or self.done.value + batch >= total:
+                        with self.done.get_lock():
+                            self.done.value += batch
+                        batch = 0
         else:
-            init_worker(*init_args) if isinstance(init_args, tuple) else init_worker(init_args)
+            init_worker(*init_args)
             for task in tasks:
                 res = evaluate_grating(task)
                 if res is not None:
                     results.append(res)
-                done += 1
-                try:
-                    progress_callback(done, total)
-                except Exception:
-                    pass
+
+                batch += 1
+                if batch % step == 0 or done.value + batch >= total:
+                    with done.get_lock():
+                        done.value += batch
+                    batch = 0
 
         valid = [r for r in results if r is not None]
 

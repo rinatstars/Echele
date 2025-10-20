@@ -122,6 +122,7 @@ def find_orders_range(
 
 
 @lru_cache(maxsize=4096)
+
 def diffraction_angle(k: int, lam: float, lines_in_mm: float, gamma_rad: float, alfa_rad: float = 0.0) -> float | None:
     """
     Угол дифракции решётки (радианы).
